@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
+
+from .config import WorkflowConfig
 
 
 class WorkflowError(ValueError):
@@ -15,6 +18,14 @@ class WorkflowError(ValueError):
 class WorkflowDefinition:
     config: dict[str, Any]
     prompt_template: str
+
+    def typed_config(
+        self,
+        *,
+        workflow_path: str | Path | None = None,
+        environ: Mapping[str, str] | None = None,
+    ) -> WorkflowConfig:
+        return WorkflowConfig.from_mapping(self.config, workflow_path=workflow_path, environ=environ)
 
 
 def load_workflow(path: str | Path) -> WorkflowDefinition:
@@ -31,7 +42,10 @@ def load_workflow(path: str | Path) -> WorkflowDefinition:
 def parse_workflow(content: str) -> WorkflowDefinition:
     if content.startswith("---"):
         front_matter, body = _split_front_matter(content)
-        parsed = yaml.safe_load(front_matter) if front_matter.strip() else {}
+        try:
+            parsed = yaml.safe_load(front_matter) if front_matter.strip() else {}
+        except yaml.YAMLError as exc:
+            raise WorkflowError("workflow_parse_error") from exc
 
         if parsed is None:
             parsed = {}
@@ -41,6 +55,64 @@ def parse_workflow(content: str) -> WorkflowDefinition:
         return WorkflowDefinition(config=parsed, prompt_template=body.strip())
 
     return WorkflowDefinition(config={}, prompt_template=content.strip())
+
+
+def render_prompt(prompt_template: str, *, issue: Any, attempt: int | None = None) -> str:
+    template = prompt_template.strip() or "You are working on an issue from Linear."
+    context = {"issue": _template_value(issue), "attempt": attempt}
+
+    try:
+        from jinja2 import Environment, StrictUndefined, TemplateError
+    except ModuleNotFoundError:
+        return _render_prompt_fallback(template, context)
+
+    try:
+        environment = Environment(undefined=StrictUndefined, autoescape=False)
+        return environment.from_string(template).render(context).strip()
+    except TemplateError as exc:
+        raise WorkflowError("template_render_error") from exc
+
+
+@dataclass
+class WorkflowReloader:
+    path: Path
+    last_good: WorkflowDefinition | None = None
+    last_error: WorkflowError | None = None
+
+    @classmethod
+    def for_path(cls, path: str | Path) -> "WorkflowReloader":
+        return cls(Path(path))
+
+    def load_initial(self) -> WorkflowDefinition:
+        workflow = load_workflow(self.path)
+        self.last_good = workflow
+        self.last_error = None
+        return workflow
+
+    def reload(self) -> WorkflowDefinition:
+        try:
+            workflow = load_workflow(self.path)
+        except WorkflowError as exc:
+            self.last_error = exc
+            if self.last_good is None:
+                raise
+            return self.last_good
+
+        self.last_good = workflow
+        self.last_error = None
+        return workflow
+
+
+async def watch_workflow(path: str | Path):
+    try:
+        from watchfiles import awatch
+    except ModuleNotFoundError as exc:
+        raise WorkflowError("workflow_watcher_unavailable") from exc
+
+    workflow_path = Path(path).resolve()
+    async for changes in awatch(workflow_path.parent):
+        if any(Path(changed_path).resolve() == workflow_path for _, changed_path in changes):
+            yield changes
 
 
 def _split_front_matter(content: str) -> tuple[str, str]:
@@ -53,3 +125,37 @@ def _split_front_matter(content: str) -> tuple[str, str]:
             return "".join(lines[1:index]), "".join(lines[index + 1 :])
 
     raise WorkflowError("unterminated_workflow_front_matter")
+
+
+def _template_value(value: Any) -> Any:
+    if is_dataclass(value):
+        return asdict(value)
+    if isinstance(value, dict):
+        return {key: _template_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_template_value(item) for item in value]
+    return value
+
+
+_INTERPOLATION_RE = re.compile(r"{{\s*([^{}]+?)\s*}}")
+
+
+def _render_prompt_fallback(template: str, context: dict[str, Any]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        expression = match.group(1).strip()
+        if "|" in expression:
+            raise WorkflowError("template_render_error")
+
+        value: Any = context
+        for part in expression.split("."):
+            part = part.strip()
+            if not part:
+                raise WorkflowError("template_render_error")
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+                continue
+            raise WorkflowError("template_render_error")
+
+        return "" if value is None else str(value)
+
+    return _INTERPOLATION_RE.sub(replace, template).strip()
