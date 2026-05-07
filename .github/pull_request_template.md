@@ -1,22 +1,33 @@
-#### Context
+## Linear
 
-<!-- Why is this change needed? Length <= 240 chars -->
+- Issue:
 
-#### TL;DR
+## Summary
 
-*<!-- A short description of what we are changing. Use simple language. Assume reader is not familiar with this code. Length <= 120 chars -->*
+-
 
-#### Summary
+## Decision Context
 
-- <!-- Details of the changes in bullet points -->
-- <!-- Keep them high level -->
-- <!-- Each item <= 120 chars -->
+- Selected solution:
+- Alternatives considered:
+- Follow-up work:
 
-#### Alternatives
+## Validation
 
-- <!-- What alternatives have been considered? Why not? -->
+- Targeted checks:
+- Full gates:
+- Not run:
 
-#### Test Plan
+## UI Evidence
 
-- [ ] `make -C elixir all`
-- [ ] <!-- Additional targeted checks (list below) -->
+For UI-impacted changes, include `.png` captures of the changed screens.
+Committed screenshots should live under `docs/pr-screenshots/<issue>/` or
+`review-artifacts/<issue>/` so Git LFS tracks them.
+
+- Screenshots:
+- Not applicable:
+
+## Review
+
+- Reviewer / agent requested:
+- Blocking comments resolved:

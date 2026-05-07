@@ -1,0 +1,12 @@
+[project]
+name = "symphony"
+version = "0.1.0"
+description = "Python implementation of the Symphony agent orchestration service"
+requires-python = ">=3.12"
+dependencies = [
+  "pyyaml>=6.0",
+]
+
+[tool.unittest]
+start-dir = "tests"
+pattern = "test_*.py"
