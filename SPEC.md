@@ -377,6 +377,7 @@ Fields:
 
 - `root` (path string or `$VAR`)
   - Default: `<system-temp>/symphony_workspaces`
+  - Missing `$VAR` references fail configuration validation and include the variable name.
   - `~` is expanded.
   - Relative paths are resolved relative to the directory containing `WORKFLOW.md`.
   - The effective workspace root is normalized to an absolute path before use.
@@ -422,7 +423,8 @@ Fields:
 - `max_concurrent_agents_by_state` (map `state_name -> positive integer`)
   - Default: empty map.
   - State keys are normalized (`lowercase`) for lookup.
-  - Invalid entries (non-positive or non-numeric) are ignored.
+  - Invalid entries (empty state names, non-positive limits, or non-numeric limits) fail
+    configuration validation.
 
 #### 5.3.6 `codex` (object)
 
@@ -450,9 +452,8 @@ fields locally if they want stricter startup checks.
   - Default: `3600000` (1 hour)
 - `read_timeout_ms` (integer)
   - Default: `5000`
-- `stall_timeout_ms` (integer)
+- `stall_timeout_ms` (positive integer)
   - Default: `300000` (5 minutes)
-  - If `<= 0`, stall detection is disabled.
 
 ### 5.4 Prompt Template Contract
 
@@ -593,7 +594,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `codex.turn_sandbox_policy`: Codex `SandboxPolicy` value, default implementation-defined
 - `codex.turn_timeout_ms`: integer, default `3600000`
 - `codex.read_timeout_ms`: integer, default `5000`
-- `codex.stall_timeout_ms`: integer, default `300000`
+- `codex.stall_timeout_ms`: positive integer, default `300000`
 
 ## 7. Orchestration State Machine
 
@@ -786,7 +787,6 @@ Part A: Stall detection
   - `last_codex_timestamp` if any event has been seen, else
   - `started_at`
 - If `elapsed_ms > codex.stall_timeout_ms`, terminate the worker and queue a retry.
-- If `stall_timeout_ms <= 0`, skip stall detection entirely.
 
 Part B: Tracker state refresh
 

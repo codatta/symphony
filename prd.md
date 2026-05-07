@@ -540,7 +540,8 @@ the result.
 
 - Python project skeleton, package layout, CLI entrypoint, and logging baseline.
 - `WORKFLOW.md` parser with YAML front matter, prompt template rendering, `$VAR`
-  resolution, defaults, `~` expansion, and hot reload.
+  resolution with named missing-variable errors, strict config validation,
+  defaults, `~` expansion, and hot reload.
 - Core domain models for issues, workflow config, sessions, events, workspaces,
   and run state.
 - Linear authentication for MVP operation. Personal API key support is required;
@@ -731,7 +732,8 @@ after the primary product is usable.
 - [ ] **[Core: Python skeleton]** — package layout, CLI, logging, test harness,
   core domain models.
 - [ ] **[Core: WORKFLOW.md parser]** — YAML front matter, Jinja2 prompt rendering,
-  `$VAR` resolution, defaults, `~` expansion, and hot reload.
+  `$VAR` resolution with named missing-variable errors, strict config validation,
+  defaults, `~` expansion, and hot reload.
 - [ ] **[Linear: MVP auth + tracker read path]** — personal API key support,
   token redaction, candidate issue fetch, state refresh, pagination, and
   normalized issue model.

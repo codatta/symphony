@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import AsyncGenerator
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -89,6 +90,7 @@ class WorkflowReloader:
         self.last_error = None
         return workflow
 
+    # Not thread-safe; callers must serialize reload calls.
     def reload(self) -> WorkflowDefinition:
         try:
             workflow = load_workflow(self.path)
@@ -103,7 +105,7 @@ class WorkflowReloader:
         return workflow
 
 
-async def watch_workflow(path: str | Path):
+async def watch_workflow(path: str | Path) -> AsyncGenerator[Any, None]:
     try:
         from watchfiles import awatch
     except ModuleNotFoundError as exc:

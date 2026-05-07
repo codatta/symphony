@@ -68,8 +68,6 @@ You are working on {{ issue.identifier }}.
                         "max_concurrent_agents_by_state": {
                             "Todo": 2,
                             "In Progress": "3",
-                            "Broken": 0,
-                            "Ignored": "not-int",
                         },
                     },
                     "codex": {"command": "codex app-server --profile symphony"},
@@ -81,8 +79,28 @@ You are working on {{ issue.identifier }}.
             self.assertEqual(30_000, config.polling.interval_ms)
             self.assertEqual(60_000, config.hooks.timeout_ms)
             self.assertEqual(4, config.agent.max_concurrent_agents)
-            self.assertEqual({"todo": 2, "in progress": 3}, config.agent.max_concurrent_agents_by_state)
+            self.assertEqual({"todo": 2, "in progress": 3}, dict(config.agent.max_concurrent_agents_by_state))
             self.assertEqual("codex app-server --profile symphony", config.codex.command)
+
+    def test_agent_state_limits_are_immutable(self):
+        config = WorkflowConfig.from_mapping(
+            {
+                "tracker": {"kind": "linear"},
+                "agent": {"max_concurrent_agents_by_state": {"Todo": 2}},
+            }
+        )
+
+        with self.assertRaises(TypeError):
+            config.agent.max_concurrent_agents_by_state["todo"] = 99
+
+    def test_invalid_agent_state_limit_entry_is_rejected(self):
+        with self.assertRaisesRegex(ConfigError, "agent_state_limit_must_be_positive"):
+            WorkflowConfig.from_mapping(
+                {
+                    "tracker": {"kind": "linear"},
+                    "agent": {"max_concurrent_agents_by_state": {"Todo": 0}},
+                }
+            )
 
     def test_workspace_root_supports_env_reference_and_home_expansion(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -97,9 +115,23 @@ You are working on {{ issue.identifier }}.
 
             self.assertEqual(Path.home() / "symphony-integration", config.workspace.root)
 
+    def test_missing_workspace_root_env_reference_names_variable(self):
+        with self.assertRaisesRegex(ConfigError, "env_var_not_set:WORKSPACE_ROOT"):
+            WorkflowConfig.from_mapping(
+                {
+                    "tracker": {"kind": "linear"},
+                    "workspace": {"root": "$WORKSPACE_ROOT"},
+                },
+                environ={},
+            )
+
     def test_invalid_positive_int_config_is_rejected(self):
         with self.assertRaisesRegex(ConfigError, "agent_max_turns_must_be_positive"):
             WorkflowConfig.from_mapping({"tracker": {"kind": "linear"}, "agent": {"max_turns": 0}})
+
+    def test_invalid_stall_timeout_is_rejected(self):
+        with self.assertRaisesRegex(ConfigError, "codex_stall_timeout_ms_must_be_positive"):
+            WorkflowConfig.from_mapping({"tracker": {"kind": "linear"}, "codex": {"stall_timeout_ms": 0}})
 
     def test_render_prompt_uses_strict_issue_context(self):
         rendered = render_prompt(

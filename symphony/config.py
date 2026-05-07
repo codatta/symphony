@@ -5,6 +5,7 @@ import tempfile
 from dataclasses import dataclass, field
 from os import PathLike
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping
 
 
@@ -118,7 +119,7 @@ class AgentConfig:
     max_concurrent_agents: int = DEFAULT_MAX_CONCURRENT_AGENTS
     max_turns: int = DEFAULT_MAX_TURNS
     max_retry_backoff_ms: int = DEFAULT_MAX_RETRY_BACKOFF_MS
-    max_concurrent_agents_by_state: dict[str, int] = field(default_factory=dict)
+    max_concurrent_agents_by_state: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "AgentConfig":
@@ -163,7 +164,7 @@ class CodexConfig:
                 DEFAULT_CODEX_READ_TIMEOUT_MS,
                 "codex_read_timeout_ms",
             ),
-            stall_timeout_ms=_int_value(
+            stall_timeout_ms=_positive_int(
                 codex.get("stall_timeout_ms"),
                 DEFAULT_CODEX_STALL_TIMEOUT_MS,
                 "codex_stall_timeout_ms",
@@ -206,7 +207,11 @@ def resolve_env_reference(value: str, environ: Mapping[str, str] | None = None) 
         return value
 
     env = environ if environ is not None else os.environ
-    return env.get(value[1:], "")
+    var_name = value[1:]
+    result = env.get(var_name)
+    if result is None:
+        raise ConfigError(f"env_var_not_set:{var_name}")
+    return result
 
 
 def _string_value(value: Any) -> str | None:
@@ -268,9 +273,9 @@ def _int_value(value: Any, default: int, field_name: str) -> int:
     raise ConfigError(f"{field_name}_must_be_integer")
 
 
-def _state_limit_map(value: Any) -> dict[str, int]:
+def _state_limit_map(value: Any) -> Mapping[str, int]:
     if value is None:
-        return {}
+        return MappingProxyType({})
     if not isinstance(value, Mapping):
         raise ConfigError("agent_state_limits_must_be_map")
 
@@ -278,13 +283,9 @@ def _state_limit_map(value: Any) -> dict[str, int]:
     for raw_state, raw_limit in value.items():
         state = _string_value(raw_state)
         if state is None:
-            continue
+            raise ConfigError("agent_state_limit_state_required")
 
-        try:
-            limit = _positive_int(raw_limit, 0, "agent_state_limit")
-        except ConfigError:
-            continue
-
+        limit = _positive_int(raw_limit, 0, "agent_state_limit")
         limits[state.lower()] = limit
 
-    return limits
+    return MappingProxyType(limits)
