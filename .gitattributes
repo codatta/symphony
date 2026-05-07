@@ -1,0 +1,4 @@
+# PR review screenshots and other recurring binary review artifacts are stored
+# through Git LFS so visual evidence does not bloat normal Git history.
+docs/pr-screenshots/**/*.png filter=lfs diff=lfs merge=lfs -text
+review-artifacts/**/*.png filter=lfs diff=lfs merge=lfs -text

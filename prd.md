@@ -1,6 +1,6 @@
 # Symphony — Product Requirements Document
 
-## Status: Draft v0.1 — Open for review before implementation begins
+## Status: Draft v0.5 — CLI-first MVP: Linear + Codex first
 
 > See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design, component diagram, data flows, and module layout.
 
@@ -478,239 +478,343 @@ server:
 
 ---
 
-## 6. Build Queue
+## 6. Implementation Plan
 
-> Items are ordered. Complete one fully before starting the next.
+The build is divided into product phases. Phase 1 is the MVP: a CLI-first
+Symphony daemon that can read Linear work, create isolated workspaces, run Codex,
+and hand results back through Linear. This is the fastest path to real use and
+feedback. The standalone app follows once the core loop is proven.
 
-### 🔜 Next Up
+Each phase must end with a working slice, updated `prd.md` context if decisions
+change, Linear ticket updates, a PR, and review evidence.
 
-- [ ] **[Linear: Authentication]** — Implement `TokenStore`, OAuth 2.0 flow, and `symphony auth linear` CLI command
-  - **User:** All Symphony users — authentication is a gate for every other feature
-  - **Acceptance Criteria:**
-    - `TokenStore.resolve()` checks env → WORKFLOW.md → Keychain → credentials file, in order
-    - `symphony auth linear` CLI command: opens OAuth URL, captures code via ephemeral server, exchanges for token, stores in `~/.symphony/credentials.json` (mode `0o600`)
-    - `symphony auth linear --status` prints workspace name, actor, token age
-    - `symphony auth linear --revoke` clears token from all stores
-    - `GET /api/v1/linear/auth/url` returns OAuth authorize URL with CSRF nonce
-    - `POST /api/v1/linear/auth/callback` exchanges code, stores token, returns workspace/actor
-    - `GET /api/v1/linear/auth/status` returns auth state for setup wizard
-    - `DELETE /api/v1/linear/auth/revoke` clears token
-    - Token is never printed in logs, error messages, or API responses
-    - Desktop app: token stored in macOS Keychain via `keyring`
-    - OAuth client_id/secret read from env (`$LINEAR_CLIENT_ID`, `$LINEAR_CLIENT_SECRET`)
-  - **Technical Notes:** `keyring` library wraps Keychain on macOS and Secret Service on Linux; CSRF nonce stored in memory for the duration of the OAuth round-trip; credentials file path: `~/.symphony/credentials.json`
-  - **Tests Required:**
-    - TokenStore priority order (env beats file beats keychain)
-    - Token never appears in any log output
-    - Credential file created with correct permissions
-    - CSRF nonce mismatch rejected
-    - Revoke clears all stores
+### 6.1 Execution Rules
 
-- [ ] **[Linear: Webhook Integration]** — Real-time issue state coordination via Linear webhooks
-  - **User:** Teams where issue state changes must trigger agent reactions within seconds
-  - **Acceptance Criteria:**
-    - `linear_webhook.ensure_registered()` auto-registers a webhook for the configured team on startup when `server.public_url` is set
-    - `POST /linear/webhook` endpoint: verifies `X-Linear-Signature` HMAC-SHA256 and returns 401 on failure
-    - Issue create event → triggers immediate dispatch check (skip waiting for next tick)
-    - Issue update event (state change) → `orchestrator.reconcile_issue(id)` — stops agent if state terminal
-    - Issue remove event → release claim + clean workspace
-    - Webhook processing is async and never blocks the 200 response
-    - `tunnel: cloudflared` in WORKFLOW.md → Symphony spawns `cloudflared tunnel --url http://localhost:<port>`, captures the printed HTTPS URL, registers webhook using it
-    - `tunnel: ngrok` → same via `pyngrok`
-    - When no public URL and no tunnel: webhooks disabled, warning surfaced in dashboard; polling continues normally
-    - Dashboard shows: webhook status (active / inactive), last event timestamp
-    - `polling.interval_ms` recommendation: raise to `120000` when webhooks active (shown in setup wizard)
-  - **Technical Notes:** HMAC verified with `hmac.compare_digest` to prevent timing attacks; webhook_id persisted to `~/.symphony/state.json`; cloudflared subprocess stderr parsed for the `trycloudflare.com` URL
-  - **Tests Required:**
-    - Valid HMAC accepted; invalid rejected with 401
-    - Issue update with terminal state → `reconcile_issue` called
-    - Issue create → dispatch check triggered
-    - No public URL → graceful degradation to polling
+1. **No direct work on `main`.** Every implementation change starts on a feature
+   branch named after the Linear issue or milestone, for example
+   `feat/linear-auth-token-store`.
+2. **One PR per independently reviewable outcome.** Keep PRs small enough that a
+   reviewer can validate behavior, tests, and product intent without reading the
+   entire system at once.
+3. **Linear is the implementation ledger.** Every phase and substantial task must
+   have a corresponding Linear issue. The issue must record the selected
+   solution, decision context, rejected alternatives, validation plan, and PR
+   links.
+4. **Review loop is mandatory for code changes.** After opening a PR, request
+   review from another agent instance where available. Iterate through comments,
+   fixes, and follow-up reviews until there are no blocking comments.
+5. **UI-impact evidence is required.** For UI-impacted PRs, run the app locally
+   and attach `.png` captures of the changed screens. Committed screenshot
+   artifacts must use Git LFS or another configured storage-saving large-file
+   mechanism.
+6. **Validation must be written down.** Each PR must list targeted checks, full
+   gates that were run, skipped checks with reasons, and any manual verification.
 
-- [ ] **[Linear: Setup Wizard]** — Guided first-run flow to connect Linear and generate WORKFLOW.md
-  - **User:** Non-CLI users setting up Symphony for the first time via desktop app or web UI
-  - **Acceptance Criteria:**
-    - `GET /api/v1/linear/teams` returns team list (requires valid auth)
-    - `GET /api/v1/linear/projects?teamId=` returns projects in team
-    - `GET /api/v1/linear/workflow-states?teamId=` returns all states with type metadata
-    - `POST /api/v1/linear/generate-workflow` renders a WORKFLOW.md from inputs
-    - Setup wizard accessible at `/setup` in the web UI and opened automatically on desktop when no WORKFLOW.md configured
-    - Six-step flow: Connect → Team/Project → States → Agent → Preview → Launch
-    - State step pre-selects sensible defaults (Todo + In Progress = active; Done + Cancelled + Closed = terminal)
-    - Generated WORKFLOW.md is syntax-highlighted in the preview step; [Download] and [Save to path] buttons
-    - Wizard skipped if valid WORKFLOW.md and Linear token already present
-    - On completion, daemon starts (or restarts) with the new WORKFLOW.md
-  - **Technical Notes:** Wizard is a React multi-step form in the web frontend; state is held client-side until final submit; `generate-workflow` uses jinja2 to render from a bundled template
-  - **Tests Required:**
-    - `generate-workflow` produces valid YAML front matter + non-empty prompt body
-    - Missing auth → `teams` endpoint returns 401
-    - All six steps reachable and submittable
+### 6.2 Phase 0: Repository And Delivery Guardrails
 
-- [ ] **[Core: Python Implementation]** — Implement SPEC.md §3–§14 conformance in Python, replacing the Elixir reference impl
-  - **User:** Teams running multi-agent coding workflows
-  - **Acceptance Criteria:**
-    - `CLIAgentRunner` base class with Codex app-server adapter (functional parity with Elixir)
-    - `APIAgentRunner` base class
-    - Orchestrator: poll loop, dispatch, claims, retry/backoff, reconciliation
-    - Workspace manager: hooks, sanitized paths, safety invariants (SPEC §9.5)
-    - Config: pydantic schema, `$VAR` resolution, `~` expansion, dynamic WORKFLOW.md reload
-    - Linear tracker adapter: candidate fetch, state refresh, pagination
-    - HTTP observability server: `/api/v1/state`, `/api/v1/<identifier>`, `/api/v1/refresh`
-    - Structured logging with `issue_id`, `issue_identifier`, `session_id`
-    - CLI: positional workflow path, `--port`, `--logs-root`
-    - All SPEC §17 Core Conformance tests pass
-  - **Technical Notes:** Start from SPEC.md not the Elixir source; use `asyncio.TaskGroup` for concurrent sessions; pydantic `model_validator` for config cross-field checks
-  - **Tests Required:**
-    - Config parsing (defaults, `$VAR`, invalid YAML, hot reload)
-    - Workspace safety invariants (path traversal rejection)
-    - Dispatch priority sort
-    - Retry backoff formula
-    - Reconciliation state transitions
-    - Linear adapter (mock HTTP)
+**Goal:** Make the implementation workflow safe before product code begins.
 
-- [ ] **[Agent: Claude Code]** — Implement `ClaudeCodeRunner` using Anthropic Python SDK
-  - **User:** Teams using Claude as their primary coding agent
-  - **Acceptance Criteria:**
-    - Multi-turn streaming session via `anthropic.messages.stream()`
-    - `linear_graphql` tool exposed via `tools=[...]` in API call
-    - Session events normalized to Symphony event schema
-    - Token usage extracted from API response and reported to orchestrator
-    - Rate limit headers tracked and surfaced in `/api/v1/state`
-    - WORKFLOW.md runner config: `runner: claude_code`, `model`, `max_tokens`
-    - Continuation turns reuse existing thread context (conversation history)
-    - All SPEC §17.5 App-Server Client tests pass (adapted for SDK-based runner)
-  - **Technical Notes:** Use `anthropic` SDK v0.40+; tool_use follows `tool_use` + `tool_result` blocks; stall detection uses last streaming event timestamp
-  - **Tests Required:**
-    - Tool call dispatch (linear_graphql success, failure, unsupported tool)
-    - Turn completion / failure event normalization
-    - Token accounting across multiple turns
+**Scope:**
 
-- [ ] **[Agent: OpenAI-Compatible / Hermes]** — Implement `OpenAICompatRunner` for any OpenAI-protocol endpoint
-  - **User:** Teams running local LLMs (Ollama, vLLM, LM Studio) or Hermes models
-  - **Acceptance Criteria:**
-    - Configurable `base_url` and `model` in WORKFLOW.md
-    - Tool use via OpenAI function-calling protocol
-    - `linear_graphql` tool advertised and handled
-    - Continuation turns via conversation history accumulation
-    - Config: `runner: openai_compatible`, `base_url: $OLLAMA_URL`, `model: nous-hermes-3`
-  - **Technical Notes:** Reuses `openai` SDK with `base_url` override; covers Codex API mode as well
-  - **Tests Required:**
-    - Tool call dispatch via function-calling protocol
-    - Base URL resolution from `$VAR`
+- Root `AGENTS.md` with branch, PR, Linear, review, and UI screenshot policy.
+- PR template updates if the current template does not request Linear links,
+  validation evidence, and UI screenshots.
+- Git LFS configuration for recurring binary review artifacts such as committed
+  `.png` screenshots.
+- Initial Linear milestone or project that contains the phase tickets below.
 
-- [ ] **[Agent: Gemini API]** — Implement `GeminiAPIRunner` using `google-genai` SDK
-  - **User:** Teams using Google Gemini as their coding agent
-  - **Acceptance Criteria:**
-    - Multi-turn streaming session via `google.generativeai.GenerativeModel.generate_content_async()`
-    - `linear_graphql` tool exposed as a `FunctionDeclaration`
-    - Token usage extracted and reported
-    - Config: `runner: gemini_api`, `model: gemini-2.5-pro`, `api_key: $GOOGLE_API_KEY`
-  - **Technical Notes:** `google-genai` 1.x uses `genai.Client()`; function calling returns `FunctionCall` parts; handle `RECITATION`/safety blocks as turn failures
-  - **Tests Required:**
-    - Function call dispatch
-    - Safety block mapped to `turn_failed` event
+**Exit criteria:**
 
-- [ ] **[Agent: GPT-Image-1]** — Implement `ImageGenerationRunner` for image-generative tasks
-  - **User:** Design teams tracking visual asset creation in Linear
-  - **Acceptance Criteria:**
-    - Single API call to `openai.images.generate(model="gpt-image-1", ...)`
-    - Generated images saved to workspace with timestamp-based filenames
-    - Images committed to workspace branch via `after_run` hook pattern (or built-in git commit)
-    - Prompt rendered from WORKFLOW.md template (`{{ issue.title }}`, `{{ issue.description }}`)
-    - WORKFLOW.md config: `runner: gpt_image`, `model: gpt-image-1`, `size: 1024x1024`, `quality: high`
-    - WORKFLOW.md config: `task_type: generative` (disables turn continuation loop)
-    - Linear issue linked to generated assets via `linear_graphql` comment
-    - No stall detection, no multi-turn loop
-  - **Technical Notes:** Introduce `task_type: agentic | generative` in config schema; `generative` runners skip the turn loop and re-dispatch after single API call; image URLs from API are downloaded and saved locally
-  - **Tests Required:**
-    - Image saved to correct workspace path
-    - Prompt rendered correctly from template
-    - API failure mapped to worker failure + retry
+- `AGENTS.md` is tracked.
+- PR template captures solution, decision context, validation, and screenshots.
+- Git LFS or an equivalent storage-saving artifact policy is documented.
+- Linear contains implementation tickets for the MVP phase at minimum.
 
-- [ ] **[Mobile: Push Notifications]** — Emit operator alerts for key agent events via ntfy / webhook
-  - **User:** Operators who need to stay informed without watching a dashboard
-  - **Acceptance Criteria:**
-    - `NotificationService` subscribes to orchestrator events and dispatches push messages
-    - `ntfy` backend: HTTP `POST` to configured ntfy topic with title, body, and priority
-    - `webhook` backend: HTTP `POST` with JSON payload to configured URL
-    - WORKFLOW.md config: `notifications.backend`, `notifications.ntfy_topic`, `notifications.webhook_url`, `notifications.events` list
-    - Events dispatched: `human_review`, `agent_blocked`, `agent_stalled`, `worker_failed`
-    - Notification failures are logged and ignored — never crash or stall the orchestrator
-    - `notifications.events: []` disables all notifications
-  - **Technical Notes:** `NotificationService` is a fire-and-forget `asyncio.Task`; use `httpx.AsyncClient` for both backends; support `$VAR` for topic/URL values
-  - **Tests Required:**
-    - ntfy POST payload shape and headers
-    - Webhook POST payload shape
-    - Notification failure does not propagate to orchestrator
-    - `events` filter correctly suppresses notifications
+### 6.3 Phase 1: MVP — CLI Linear + Codex
 
-- [ ] **[Mobile: PWA Dashboard]** — Make the web dashboard installable as a Progressive Web App
-  - **User:** Operators who want a phone home-screen shortcut to the dashboard
-  - **Acceptance Criteria:**
-    - `manifest.json` served at `/manifest.json` with app name, icons, `display: standalone`
-    - Service worker that caches the app shell for offline load
-    - Responsive layout — all `/api/v1/state` data readable on a 390px screen
-    - iOS Safari and Android Chrome "Add to Home Screen" flow works
-    - Web Push VAPID key configured via `notifications.vapid_key` in WORKFLOW.md
-    - Opt-in Web Push permission request on first open
-  - **Technical Notes:** Service worker registered from the React/Svelte frontend; VAPID key generation documented in README; `pywebpush` on the FastAPI side for Web Push delivery
-  - **Tests Required:**
-    - `manifest.json` fields present and valid
-    - Dashboard renders correctly at 390px and 768px viewports
+**Goal:** Deliver the smallest useful Symphony implementation: configure a repo,
+start the daemon from the terminal, dispatch Linear issues to Codex, and observe
+the result.
 
-- [ ] **[Mobile: Approval Gate]** — Let operators approve or reject agent action gates from their phone
-  - **User:** Operators running non-auto-approve agent policies who need to unblock agents remotely
-  - **Acceptance Criteria:**
-    - New orchestrator event: `approval_requested` with `session_id`, `issue_identifier`, `prompt`
-    - Push notification sent on `approval_requested` with Approve and Reject action deep-links
-    - `POST /api/v1/sessions/<session_id>/approve` and `/reject` endpoints
-    - Orchestrator holds the agent turn waiting on the approval channel (async `asyncio.Event`)
-    - `notifications.approval_timeout_ms` (default `300000`): treat as reject after timeout
-    - Only activates when `codex.approval_policy: on-request`; auto-approve and never-approve policies bypass this
-    - Approval response is logged with timestamp and operator source (IP)
-  - **Technical Notes:** Approval channel is an `asyncio.Event` stored in the session state; `/approve` endpoint sets it; timeout via `asyncio.wait_for`; the gate must not block the orchestrator tick loop
-  - **Tests Required:**
-    - Approve path resumes agent turn
-    - Reject path fails the current turn and triggers retry
-    - Timeout elapses → treated as rejection
-    - Gate bypassed when policy is `never` or `untrusted`
+**Scope:**
 
-- [ ] **[Desktop: Mac App]** — Distribute Symphony as a native macOS application
-  - **User:** Non-CLI users who want to install Symphony like a normal Mac app
-  - **Acceptance Criteria:**
-    - Tauri v2 app shell wraps the Python sidecar (PyInstaller bundle) and web frontend
-    - `.dmg` built via `tauri build`; drag-to-`/Applications` install
-    - Menubar icon shows live agent count (e.g. `♩ 3 running`)
-    - Menubar dropdown: Open Dashboard, Start/Stop Symphony, Preferences, Quit
-    - Native macOS notification for each event in the configured `notifications.events` list
-    - Dashboard opens in an embedded WKWebView window (not the user's browser)
-    - Sidecar starts automatically on app launch; stops on quit
-    - `tauri-plugin-single-instance` prevents duplicate daemons
-    - Auto-update via GitHub Releases feed (`tauri-plugin-updater`)
-    - WORKFLOW.md path configurable in Preferences (persisted via `tauri-plugin-store`)
-  - **Technical Notes:** Python sidecar registered in `tauri.conf.json` `externalBin`; PyInstaller build step added to CI; `--headless` flag suppresses terminal output when launched by Tauri; health check at `GET /api/v1/health` polled by Tauri every 5s; Tauri Rust code is minimal — just sidecar lifecycle + notifications
-  - **Tests Required:**
-    - Sidecar starts and responds to `/api/v1/health` within 5s of app launch
-    - Sidecar terminates cleanly when app quits
-    - Menubar agent count updates when `/api/v1/state` changes
-    - Preferences WORKFLOW.md path is persisted across restarts
+- Python project skeleton, package layout, CLI entrypoint, and logging baseline.
+- `WORKFLOW.md` parser with YAML front matter, prompt template rendering, `$VAR`
+  resolution, defaults, `~` expansion, and hot reload.
+- Core domain models for issues, workflow config, sessions, events, workspaces,
+  and run state.
+- Linear authentication for MVP operation. Personal API key support is required;
+  OAuth can ship later and must not block the polling-based MVP.
+- Linear tracker read path: candidate issue fetch, state refresh, pagination,
+  and normalized issue model.
+- `linear_graphql` client-side tool so Codex can comment, update issue state,
+  and attach PR links using Symphony-managed Linear auth.
+- Orchestrator poll loop, dispatch, claims, bounded concurrency, retry/backoff,
+  reconciliation, and cleanup.
+- Per-issue workspace lifecycle manager with sanitized paths, lifecycle hooks,
+  and root containment safety checks.
+- `AgentRunner` abstraction, `CLIAgentRunner` base, and Codex app-server
+  JSON-RPC adapter.
+- Minimal HTTP/status surface: `/api/v1/state`, `/api/v1/<identifier>`,
+  `/api/v1/refresh`, `/api/v1/health`, and recent log access.
+
+**Alternatives considered:**
+
+- Start with a standalone app first. This improves onboarding, but delays the
+  core proof that Symphony can execute Linear work through Codex.
+- Require OAuth in the MVP. This improves onboarding, but API-key setup is enough
+  for the first operational loop and keeps the first authentication surface
+  smaller.
+- Implement all runner abstractions before Codex. This is architecturally tidy,
+  but expands the first delivery slice before the Linear/Codex loop is proven.
+- Require webhooks in the MVP. Webhooks improve responsiveness, but polling is
+  enough to prove the product loop and avoids public URL/tunnel complexity.
+
+**Exit criteria:**
+
+- `symphony --help` works.
+- A user can start Symphony from the terminal with a repository-owned
+  `WORKFLOW.md`.
+- Config, tracker, workspace, orchestrator, and Codex runner tests pass.
+- A Linear issue in an active state can dispatch one Codex session in a
+  per-issue workspace.
+- Codex can use `linear_graphql` to post progress and move the issue to the
+  workflow-defined handoff state.
+- Terminal-state reconciliation stops or releases active work.
+- Logs and the minimal status API are sufficient to debug a session from issue
+  id to agent result.
+
+**MVP usage flow:**
+
+1. Install the Python package in a local environment.
+2. Create or edit `WORKFLOW.md` in the target repository.
+3. Set `LINEAR_API_KEY` and any required Codex environment/auth state.
+4. Run `symphony /path/to/repo/WORKFLOW.md --port 7337 --logs-root ./log`.
+5. Move a Linear issue into an active state.
+6. Symphony polls Linear, creates an isolated workspace, renders the prompt, and
+   starts Codex in that workspace.
+7. Codex uses `linear_graphql` to post progress, attach PR links, and move the
+   issue to the configured handoff state.
+8. The operator checks logs and the status API to verify the run.
+
+### 6.4 Phase 2: Standalone App And Linear Productionization
+
+**Goal:** Make Symphony approachable and secure after the CLI MVP loop works.
+
+**Scope:**
+
+- Tauri macOS app shell with bundled Python sidecar.
+- First-run setup flow for repository selection, Linear auth, state selection,
+  Codex availability, workspace root, and `WORKFLOW.md` generation.
+- Basic app status view for configuration status, active issues, run state, and
+  recent logs.
+- OAuth 2.0 / PKCE flow, token refresh, Keychain or credentials-file storage,
+  revoke/status commands, and `/api/v1/linear/auth/*` endpoints.
+- Linear webhook registration, HMAC verification, async event processing, and
+  graceful fallback to polling.
+- Optional tunnel support for local development.
+- Signed and notarized `.dmg` packaging.
+- Auto-update and app preference hardening.
+
+**Exit criteria:**
+
+- The app can be launched from Finder on macOS.
+- The app can start and stop the bundled Python sidecar.
+- First-run setup can generate or update `WORKFLOW.md` for Linear + Codex.
+- State changes in Linear trigger reconcile/dispatch without waiting for the next
+  poll tick.
+- Invalid webhook signatures are rejected.
+- App credentials are stored securely and can be revoked.
+- Signed app can be installed through the normal macOS drag-to-Applications flow.
+- UI PRs include local test run notes and `.png` captures of changed screens.
+
+### 6.5 Phase 3: Operator Visibility And Approval
+
+**Goal:** Give operators a usable day-to-day control surface before adding more
+agent backends.
+
+**Scope:**
+
+- FastAPI SSE event stream if not already complete in MVP.
+- Web dashboard with issue state, active sessions, logs, retry counts, and
+  approval UI.
+- Notification service with ntfy and webhook backends.
+- Approval gate endpoints and notification deep links.
+- PWA/mobile layout after the dashboard workflow is stable.
+
+**Exit criteria:**
+
+- Operators can inspect running work without reading raw logs.
+- Approval/rejection can unblock or stop an agent turn without blocking the main
+  orchestrator loop.
+- Notification failures are isolated from orchestrator execution.
+- UI PRs include screenshot evidence for changed flows.
+
+### 6.6 Phase 4: Multi-Agent Runner Expansion
+
+**Goal:** Add non-Codex runners after the MVP session, tracker, and operator
+contracts are stable.
+
+**Order:**
+
+1. Claude Code / Anthropic SDK runner.
+2. OpenAI-compatible runner for Hermes, Ollama, vLLM, and hosted compatible
+   endpoints.
+3. Gemini API runner.
+4. GPT-Image-1 generative runner after `task_type` semantics are finalized.
+
+**Exit criteria:**
+
+- Each runner maps provider-specific streaming, tool calls, token usage, and
+  failures into the common Symphony event schema.
+- `linear_graphql` tool behavior is tested for every agentic runner.
+- Provider-specific rate limits and safety blocks surface in observability.
+
+### 6.7 Phase 5: IM Integrations And Distribution Expansion
+
+**Goal:** Extend operator controls into team communication tools and broaden
+distribution after the standalone app is stable.
+
+**Scope:**
+
+- Telegram bot.
+- Slack bot.
+- Additional distribution channels beyond direct `.dmg` download.
+
+**Exit criteria:**
+
+- IM integrations can send key events and process approval/cancel actions.
+- UI and integration PRs include screenshot evidence for changed flows.
+
+### 6.8 Phase 6: Backlog And Expansion
+
+**Goal:** Add optional tracker, sandboxing, persistence, and multimodal features
+after the primary product is usable.
+
+**Scope:**
+
+- GitHub Issues and Jira tracker adapters.
+- Docker/cgroup workspace sandboxing.
+- Persistent retry queue.
+- Multi-runner dispatch by label/state.
+- Vision inputs and other multimodal extensions.
+
+### 6.9 Validation Gates By Layer
+
+| Layer | Required validation |
+|---|---|
+| Config/workflow | Schema tests, `$VAR` tests, invalid YAML tests, hot reload tests |
+| Workspace | Path traversal rejection, root containment, hook execution, cleanup |
+| Tracker | Mock Linear GraphQL tests, pagination, auth failure, webhook HMAC |
+| Orchestrator | Dispatch priority, bounded concurrency, retry/backoff, reconciliation |
+| Agent runners | Event normalization, tool dispatch, timeout/stall handling, token usage |
+| HTTP/API | Endpoint contract tests, auth errors, SSE or polling behavior |
+| UI | Local test run plus `.png` captures of impacted screens |
+| Desktop | Sidecar lifecycle, health polling, preferences persistence, packaging smoke test |
 
 ---
 
-### 🔵 Backlog
+## 7. Build Queue
 
-- [ ] **[Tracker: GitHub Issues adapter]** — support GitHub Issues as an alternative to Linear
-- [ ] **[Tracker: Jira adapter]** — support Jira projects
-- [ ] **[SSH Worker Extension]** — port Appendix A SSH worker extension from Elixir impl
-- [ ] **[Observability: LiveDashboard]** — rich real-time dashboard (SSE/WebSocket push)
-- [ ] **[Security: Workspace sandboxing]** — Docker/cgroup-based execution isolation per workspace
-- [ ] **[Config: Multi-runner per workflow]** — dispatch different issue labels to different agent runners
-- [ ] **[Retry: Persistent queue]** — survive process restarts without losing retry state (SQLite)
-- [ ] **[Multimodal: Vision input]** — pass screenshot/image from workspace into agent prompt (Claude/Gemini)
+> Ordered work packages. Linear ticket priorities should mirror this order:
+> urgent/high for MVP blockers, medium for post-MVP productionization, and low
+> for optional expansion.
+
+### 7.1 Phase 0: Guardrails
+
+- [ ] **[Delivery: Repo guardrails]** — Track `AGENTS.md`, update the PR template
+  for Linear links and validation evidence, and configure or document Git LFS for
+  recurring `.png` review artifacts.
+
+### 7.2 Phase 1: MVP — CLI Linear + Codex
+
+- [ ] **[Core: Python skeleton]** — package layout, CLI, logging, test harness,
+  core domain models.
+- [ ] **[Core: WORKFLOW.md parser]** — YAML front matter, Jinja2 prompt rendering,
+  `$VAR` resolution, defaults, `~` expansion, and hot reload.
+- [ ] **[Linear: MVP auth + tracker read path]** — personal API key support,
+  token redaction, candidate issue fetch, state refresh, pagination, and
+  normalized issue model.
+- [ ] **[Linear: `linear_graphql` tool]** — scoped GraphQL tool for agent comments,
+  state transitions, and PR links using Symphony-managed auth.
+- [ ] **[Core: Orchestration state machine]** — poll loop, dispatch, claims,
+  bounded concurrency, retry/backoff, reconciliation, and cleanup.
+- [ ] **[Core: Workspace lifecycle]** — per-issue directories, sanitized paths,
+  lifecycle hooks, and root containment checks.
+- [ ] **[Agent: Runner base classes]** — `AgentRunner`, `CLIAgentRunner`, and
+  `APIAgentRunner` contracts.
+- [ ] **[Agent: Codex runner]** — Codex app-server JSON-RPC adapter with event
+  normalization, timeout/stall handling, and `linear_graphql` tool routing.
+- [ ] **[HTTP: Minimal status API]** — `/api/v1/state`,
+  `/api/v1/<identifier>`, `/api/v1/refresh`, and `/api/v1/health`.
+
+### 7.3 Phase 2: Standalone App And Linear Productionization
+
+- [ ] **[Desktop: App shell]** — Tauri shell, embedded web UI, Python sidecar
+  start/stop, health polling, and local app preferences.
+- [ ] **[Desktop: Setup flow]** — repository picker, Linear auth setup,
+  team/project/state selection, Codex availability check, workspace root,
+  concurrency, and `WORKFLOW.md` generation.
+- [ ] **[UI: App status view]** — setup status, idle/running/completed/failed
+  states, issue list, and recent logs inside the app.
+- [ ] **[Linear: OAuth 2.0 / PKCE]** — full OAuth flow, token refresh,
+  status/revoke commands, Keychain or credentials-file storage, and auth API
+  endpoints.
+- [ ] **[Linear: Webhooks]** — webhook registration, HMAC verification, async
+  event routing, optional tunnels, and polling fallback.
+- [ ] **[Desktop: Signed distribution]** — signed and notarized `.dmg`,
+  drag-to-Applications install, app preferences hardening, and update feed.
+
+### 7.4 Phase 3: Operator Visibility And Approval
+
+- [ ] **[HTTP: SSE event stream]** — typed runtime event stream for dashboards and
+  future desktop shell.
+- [ ] **[UI: Web dashboard / PWA]** — active issues, status badges, logs,
+  retry counts, approval UI, and mobile-responsive layout.
+- [ ] **[Mobile: Push notifications]** — ntfy and generic webhook backends for
+  human review, blocked, stalled, and failed sessions.
+- [ ] **[Mobile: Approval gate]** — approve/reject endpoints and deep links that
+  unblock or stop agent turns.
+
+### 7.5 Phase 4: Multi-Agent Runners
+
+- [ ] **[Agent: Claude Code]** — Anthropic/Claude Code runner with streaming,
+  tool routing, token accounting, and normalized Symphony events.
+- [ ] **[Agent: OpenAI-compatible / Hermes]** — OpenAI protocol runner for
+  Ollama, vLLM, LM Studio, Hermes, and hosted compatible endpoints.
+- [ ] **[Agent: Gemini API]** — Gemini runner with function calling,
+  streaming, token usage, and safety-block handling.
+- [ ] **[Agent: GPT-Image-1]** — generative image runner after `task_type`
+  semantics are finalized.
+
+### 7.6 Phase 5: IM Integrations And Distribution Expansion
+
+- [ ] **[IM: Telegram bot]** — push notifications and inline approval/cancel
+  actions.
+- [ ] **[IM: Slack bot]** — Slack socket-mode notifications and Block Kit
+  approval/cancel actions.
+- [ ] **[Distribution: Additional channels]** — packaging beyond direct `.dmg`
+  download, such as managed enterprise installation or marketplace submission.
+
+### 7.7 Backlog
+
+- [ ] **[Tracker: GitHub Issues adapter]** — support GitHub Issues as an
+  alternative to Linear.
+- [ ] **[Tracker: Jira adapter]** — support Jira projects.
+- [ ] **[SSH Worker Extension]** — port Appendix A SSH worker extension from the
+  Elixir implementation.
+- [ ] **[Security: Workspace sandboxing]** — Docker/cgroup-based execution
+  isolation per workspace.
+- [ ] **[Config: Multi-runner per workflow]** — dispatch different labels or
+  states to different agent runners.
+- [ ] **[Retry: Persistent queue]** — survive process restarts without losing
+  retry state.
+- [ ] **[Multimodal: Vision input]** — pass screenshots/images from the workspace
+  into agent prompts.
 
 ---
 
-## 7. Open Questions
+## 8. Open Questions
 
 1. **Linear OAuth app registration:** Should Symphony ship with a shared OAuth client_id (users install the Symphony Linear app from Linear's marketplace), or does each team register their own Linear application with their own client_id/secret?
 2. **Hermes deployment:** Is the target Ollama on localhost, a remote vLLM cluster, or a hosted inference endpoint?
