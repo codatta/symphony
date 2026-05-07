@@ -556,6 +556,12 @@ the result.
   and root containment safety checks.
 - `AgentRunner` abstraction, `CLIAgentRunner` base, and Codex app-server
   JSON-RPC adapter.
+  - **IN-171 implementation reference:** define runner-neutral session,
+    event, token usage, turn result, and task result models before implementing
+    provider-specific runners. The first contract slice includes abstract
+    session-oriented `AgentRunner`/`CLIAgentRunner` classes and one-shot
+    `APIAgentRunner` classes; concrete Codex subprocess behavior remains a
+    follow-up ticket.
 - Minimal HTTP/status surface: `/api/v1/state`, `/api/v1/<identifier>`,
   `/api/v1/refresh`, `/api/v1/health`, and recent log access.
 
@@ -743,8 +749,11 @@ after the primary product is usable.
   bounded concurrency, retry/backoff, reconciliation, and cleanup.
 - [ ] **[Core: Workspace lifecycle]** — per-issue directories, sanitized paths,
   lifecycle hooks, and root containment checks.
-- [ ] **[Agent: Runner base classes]** — `AgentRunner`, `CLIAgentRunner`, and
-  `APIAgentRunner` contracts.
+- [x] **[Agent: Runner base classes] (Linear: IN-171)** — runner-neutral
+  session, event, token usage, turn result, and task result models plus
+  `AgentRunner`, `CLIAgentRunner`, and `APIAgentRunner` abstract contracts.
+  Concrete Codex app-server process management remains in the Codex runner
+  ticket.
 - [ ] **[Agent: Codex runner]** — Codex app-server JSON-RPC adapter with event
   normalization, timeout/stall handling, and `linear_graphql` tool routing.
 - [ ] **[HTTP: Minimal status API]** — `/api/v1/state`,
