@@ -1,10 +1,11 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
 
 from symphony.auth import MissingLinearTokenError, TokenStore
 from symphony.config import ConfigError, TrackerConfig, WorkflowConfig
-from symphony.workflow import WorkflowError, WorkflowReloader, parse_workflow, render_prompt
+from symphony.workflow import WorkflowError, WorkflowReloader, parse_workflow, render_prompt, watch_workflow
 
 
 class WorkflowConfigTests(unittest.TestCase):
@@ -163,7 +164,8 @@ You are working on {{ issue.identifier }}.
 
             first = reloader.load_initial()
             workflow_path.write_text("---\ntracker: [broken\n---\nSecond\n", encoding="utf-8")
-            second = reloader.reload()
+            with self.assertLogs("symphony.workflow", level="ERROR"):
+                second = reloader.reload()
 
             self.assertIs(first, second)
             self.assertIsNotNone(reloader.last_error)
@@ -173,6 +175,65 @@ You are working on {{ issue.identifier }}.
 
             self.assertEqual("Second", third.prompt_template)
             self.assertIsNone(reloader.last_error)
+
+    def test_effective_reloader_keeps_last_known_good_config_after_schema_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow_path = Path(temp_dir) / "WORKFLOW.md"
+            workflow_path.write_text(
+                "---\ntracker:\n  kind: linear\npolling:\n  interval_ms: 1000\n---\nFirst\n",
+                encoding="utf-8",
+            )
+            reloader = WorkflowReloader.for_path(workflow_path)
+            first = reloader.load_initial_effective()
+
+            workflow_path.write_text(
+                "---\ntracker:\n  kind: linear\nagent:\n  max_turns: 0\n---\nSecond\n",
+                encoding="utf-8",
+            )
+
+            with self.assertLogs("symphony.workflow", level="ERROR") as logs:
+                second = reloader.reload_effective()
+
+            self.assertIs(first, second)
+            self.assertIsInstance(reloader.last_error, ConfigError)
+            self.assertIn("Rejected WORKFLOW.md reload", logs.output[0])
+            self.assertEqual(1000, second.config.polling.interval_ms)
+            self.assertEqual("First", second.definition.prompt_template)
+
+            workflow_path.write_text(
+                "---\ntracker:\n  kind: linear\npolling:\n  interval_ms: 2000\n---\nThird\n",
+                encoding="utf-8",
+            )
+            third = reloader.reload_effective()
+
+            self.assertEqual(2000, third.config.polling.interval_ms)
+            self.assertEqual("Third", third.definition.prompt_template)
+            self.assertIsNone(reloader.last_error)
+
+
+class WorkflowWatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_watch_workflow_detects_file_change_within_one_second(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow_path = Path(temp_dir) / "WORKFLOW.md"
+            workflow_path.write_text("---\ntracker:\n  kind: linear\n---\nFirst\n", encoding="utf-8")
+
+            watcher = watch_workflow(workflow_path)
+
+            async def wait_for_change():
+                async for changes in watcher:
+                    return changes
+                return None
+
+            task = asyncio.create_task(wait_for_change())
+            await asyncio.sleep(0.1)
+            workflow_path.write_text("---\ntracker:\n  kind: linear\n---\nSecond\n", encoding="utf-8")
+
+            try:
+                changes = await asyncio.wait_for(task, timeout=1)
+            finally:
+                await watcher.aclose()
+
+            self.assertIsNotNone(changes)
 
 
 if __name__ == "__main__":

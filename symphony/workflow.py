@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import AsyncGenerator
 from dataclasses import asdict, dataclass, is_dataclass
@@ -8,7 +9,10 @@ from typing import Any, Mapping
 
 import yaml
 
-from .config import WorkflowConfig
+from .config import ConfigError, WorkflowConfig
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class WorkflowError(ValueError):
@@ -27,6 +31,12 @@ class WorkflowDefinition:
         environ: Mapping[str, str] | None = None,
     ) -> WorkflowConfig:
         return WorkflowConfig.from_mapping(self.config, workflow_path=workflow_path, environ=environ)
+
+
+@dataclass(frozen=True)
+class EffectiveWorkflow:
+    definition: WorkflowDefinition
+    config: WorkflowConfig
 
 
 def load_workflow(path: str | Path) -> WorkflowDefinition:
@@ -78,7 +88,8 @@ def render_prompt(prompt_template: str, *, issue: Any, attempt: int | None = Non
 class WorkflowReloader:
     path: Path
     last_good: WorkflowDefinition | None = None
-    last_error: WorkflowError | None = None
+    last_good_effective: EffectiveWorkflow | None = None
+    last_error: Exception | None = None
 
     @classmethod
     def for_path(cls, path: str | Path) -> "WorkflowReloader":
@@ -90,12 +101,23 @@ class WorkflowReloader:
         self.last_error = None
         return workflow
 
+    def load_initial_effective(self, *, environ: Mapping[str, str] | None = None) -> EffectiveWorkflow:
+        workflow = load_workflow(self.path)
+        effective = EffectiveWorkflow(
+            definition=workflow,
+            config=workflow.typed_config(workflow_path=self.path, environ=environ),
+        )
+        self.last_good = workflow
+        self.last_good_effective = effective
+        self.last_error = None
+        return effective
+
     # Not thread-safe; callers must serialize reload calls.
     def reload(self) -> WorkflowDefinition:
         try:
             workflow = load_workflow(self.path)
         except WorkflowError as exc:
-            self.last_error = exc
+            self._reject_reload(exc)
             if self.last_good is None:
                 raise
             return self.last_good
@@ -103,6 +125,29 @@ class WorkflowReloader:
         self.last_good = workflow
         self.last_error = None
         return workflow
+
+    # Not thread-safe; callers must serialize reload calls.
+    def reload_effective(self, *, environ: Mapping[str, str] | None = None) -> EffectiveWorkflow:
+        try:
+            workflow = load_workflow(self.path)
+            effective = EffectiveWorkflow(
+                definition=workflow,
+                config=workflow.typed_config(workflow_path=self.path, environ=environ),
+            )
+        except (WorkflowError, ConfigError) as exc:
+            self._reject_reload(exc)
+            if self.last_good_effective is None:
+                raise
+            return self.last_good_effective
+
+        self.last_good = workflow
+        self.last_good_effective = effective
+        self.last_error = None
+        return effective
+
+    def _reject_reload(self, exc: Exception) -> None:
+        self.last_error = exc
+        LOGGER.error("Rejected WORKFLOW.md reload for %s: %s", self.path, exc)
 
 
 async def watch_workflow(path: str | Path) -> AsyncGenerator[Any, None]:
@@ -112,7 +157,7 @@ async def watch_workflow(path: str | Path) -> AsyncGenerator[Any, None]:
         raise WorkflowError("workflow_watcher_unavailable") from exc
 
     workflow_path = Path(path).resolve()
-    async for changes in awatch(workflow_path.parent):
+    async for changes in awatch(workflow_path.parent, debounce=100, step=50):
         if any(Path(changed_path).resolve() == workflow_path for _, changed_path in changes):
             yield changes
 
