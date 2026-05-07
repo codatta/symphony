@@ -12,6 +12,7 @@ from symphony.tracker.linear import (
     LinearMissingEndCursorError,
     normalize_issue,
 )
+from symphony.tools.linear_graphql import LinearGraphQLTool, linear_graphql_tool
 
 
 def issue_payload(issue_id="issue-1", identifier="IN-1", state="Todo", priority=1):
@@ -198,6 +199,74 @@ class LinearTrackerTests(unittest.TestCase):
 
         self.assertIn("[REDACTED]", str(raised.exception))
         self.assertNotIn("lin_secret", str(raised.exception))
+
+    def test_linear_graphql_tool_executes_object_input_with_orchestrator_auth(self):
+        transport = RecordingTransport([GraphQLResponse(200, {"data": {"issue": {"id": "issue-1"}}})])
+
+        result = linear_graphql_tool(
+            self.client(transport),
+            {
+                "query": "query Issue($id: String!) { issue(id: $id) { id } }",
+                "variables": {"id": "IN-1"},
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual({"data": {"issue": {"id": "issue-1"}}}, result["response"])
+        self.assertEqual({"id": "IN-1"}, transport.calls[0]["payload"]["variables"])
+        self.assertEqual("lin_secret", transport.calls[0]["headers"]["Authorization"])
+
+    def test_linear_graphql_tool_accepts_raw_query_string(self):
+        transport = RecordingTransport([GraphQLResponse(200, {"data": {"viewer": {"id": "viewer-1"}}})])
+
+        result = linear_graphql_tool(self.client(transport), "{ viewer { id } }")
+
+        self.assertTrue(result["success"])
+        self.assertEqual({"data": {"viewer": {"id": "viewer-1"}}}, result["response"])
+
+    def test_linear_graphql_tool_preserves_graphql_error_body_as_failure(self):
+        transport = RecordingTransport([GraphQLResponse(200, {"errors": [{"message": "bad lin_secret"}]})])
+
+        result = linear_graphql_tool(self.client(transport), "{ viewer { id } }")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("linear_graphql_errors", result["error"]["code"])
+        self.assertEqual({"errors": [{"message": "bad [REDACTED]"}]}, result["response"])
+        self.assertNotIn("lin_secret", str(result))
+
+    def test_linear_graphql_tool_rejects_invalid_input_without_api_call(self):
+        transport = RecordingTransport([])
+
+        result = linear_graphql_tool(self.client(transport), {"query": "{ viewer { id } }", "variables": []})
+
+        self.assertFalse(result["success"])
+        self.assertEqual("invalid_input", result["error"]["code"])
+        self.assertEqual([], transport.calls)
+
+    def test_linear_graphql_tool_rejects_multiple_operations(self):
+        transport = RecordingTransport([])
+
+        result = linear_graphql_tool(
+            self.client(transport),
+            "query First { viewer { id } } mutation Second { issueUpdate(id: \"1\", input: {}) { success } }",
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual("invalid_input", result["error"]["code"])
+        self.assertIn("exactly_one_operation", result["error"]["message"])
+        self.assertEqual([], transport.calls)
+
+    def test_linear_graphql_tool_returns_transport_failure_payload(self):
+        class FailingTransport:
+            def __call__(self, url, payload, headers, timeout):
+                raise RuntimeError("token lin_secret rejected")
+
+        result = LinearGraphQLTool(self.client(FailingTransport())).run("{ viewer { id } }")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("linear_api_request", result["error"]["code"])
+        self.assertIn("[REDACTED]", result["error"]["message"])
+        self.assertNotIn("lin_secret", str(result))
 
 
 if __name__ == "__main__":
