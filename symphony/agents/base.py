@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 import shlex
 from typing import Any
@@ -18,6 +19,17 @@ class AgentRunnerError(RuntimeError):
     """Raised when an agent runner cannot complete its contract."""
 
 
+class AgentEventType(StrEnum):
+    SESSION_STARTED = "session_started"
+    TURN_COMPLETED = "turn_completed"
+    TURN_FAILED = "turn_failed"
+    TASK_COMPLETED = "task_completed"
+    TASK_FAILED = "task_failed"
+    NOTIFICATION = "notification"
+    MALFORMED = "malformed"
+    ERROR = "error"
+
+
 @dataclass(frozen=True)
 class TokenUsage:
     input_tokens: int = 0
@@ -27,6 +39,8 @@ class TokenUsage:
     def __post_init__(self) -> None:
         if self.input_tokens < 0 or self.output_tokens < 0 or self.total_tokens < 0:
             raise ValueError("token_usage_must_be_non_negative")
+        if self.total_tokens != self.input_tokens + self.output_tokens:
+            raise ValueError("token_usage_total_mismatch")
 
     @classmethod
     def from_input_output(cls, input_tokens: int, output_tokens: int) -> "TokenUsage":
@@ -46,13 +60,16 @@ class TokenUsage:
 
 @dataclass(frozen=True)
 class AgentEvent:
-    type: str
+    type: AgentEventType
     message: str = ""
     issue_id: str | None = None
     issue_identifier: str | None = None
     session_id: str | None = None
     data: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "type", AgentEventType(self.type))
 
 
 @dataclass(frozen=True)
@@ -88,7 +105,13 @@ class TaskResult:
         object.__setattr__(self, "output_paths", normalized)
 
 
-class AgentRunner(ABC):
+class BaseRunner(ABC):
+    """Shared marker contract for all runner implementations."""
+
+    name: str = "runner"
+
+
+class AgentRunner(BaseRunner):
     """Base contract for session-oriented coding agent backends."""
 
     name: str = "agent"
@@ -132,7 +155,7 @@ class CLIAgentRunner(AgentRunner):
         self.command = command_parts
 
 
-class APIAgentRunner(ABC):
+class APIAgentRunner(BaseRunner):
     """Base contract for API-backed one-shot task runners."""
 
     name: str = "api_agent"
