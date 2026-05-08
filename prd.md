@@ -552,6 +552,12 @@ the result.
   and attach PR links using Symphony-managed Linear auth.
 - Orchestrator poll loop, dispatch, claims, bounded concurrency, retry/backoff,
   reconciliation, and cleanup.
+  - **IN-169 implementation reference:** first deliver the runner-neutral
+    state-machine core as a pure Python module. It owns candidate ordering,
+    dispatch eligibility, claim tracking, global and per-state concurrency,
+    retry/backoff entries, stall detection, and reconciliation actions. The
+    later daemon loop will call this module when tracker, workspace, and runner
+    adapters are wired together.
 - Per-issue workspace lifecycle manager with sanitized paths, lifecycle hooks,
   and root containment safety checks.
 - `AgentRunner` abstraction, `CLIAgentRunner` base, and Codex app-server
@@ -739,8 +745,12 @@ after the primary product is usable.
   normalized issue model.
 - [ ] **[Linear: `linear_graphql` tool]** — scoped GraphQL tool for agent comments,
   state transitions, and PR links using Symphony-managed auth.
-- [ ] **[Core: Orchestration state machine]** — poll loop, dispatch, claims,
-  bounded concurrency, retry/backoff, reconciliation, and cleanup.
+- [x] **[Core: Orchestration state machine] (Linear: IN-169)** — pure
+  orchestration state module covering dispatch ordering, eligibility, claims,
+  bounded global/per-state concurrency, retry/backoff entries, continuation
+  retries, stall detection, and reconciliation cleanup decisions. Follow-up
+  runtime work will attach tracker polling, worker spawning, workspace cleanup,
+  and event publication to this state core.
 - [ ] **[Core: Workspace lifecycle]** — per-issue directories, sanitized paths,
   lifecycle hooks, and root containment checks.
 - [ ] **[Agent: Runner base classes]** — `AgentRunner`, `CLIAgentRunner`, and
