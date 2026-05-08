@@ -1,4 +1,5 @@
 import unittest
+from collections import OrderedDict
 
 from symphony.auth import TokenStore
 from symphony.config import TrackerConfig
@@ -216,6 +217,20 @@ class LinearTrackerTests(unittest.TestCase):
         self.assertEqual({"id": "IN-1"}, transport.calls[0]["payload"]["variables"])
         self.assertEqual("lin_secret", transport.calls[0]["headers"]["Authorization"])
 
+    def test_linear_graphql_tool_accepts_mapping_variables(self):
+        transport = RecordingTransport([GraphQLResponse(200, {"data": {"issue": {"id": "issue-1"}}})])
+
+        result = linear_graphql_tool(
+            self.client(transport),
+            {
+                "query": "query Issue($id: String!) { issue(id: $id) { id } }",
+                "variables": OrderedDict([("id", "IN-1")]),
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual({"id": "IN-1"}, transport.calls[0]["payload"]["variables"])
+
     def test_linear_graphql_tool_accepts_raw_query_string(self):
         transport = RecordingTransport([GraphQLResponse(200, {"data": {"viewer": {"id": "viewer-1"}}})])
 
@@ -255,6 +270,27 @@ class LinearTrackerTests(unittest.TestCase):
         self.assertEqual("invalid_input", result["error"]["code"])
         self.assertIn("exactly_one_operation", result["error"]["message"])
         self.assertEqual([], transport.calls)
+
+    def test_linear_graphql_tool_rejects_multiple_anonymous_shorthand_operations(self):
+        transport = RecordingTransport([])
+
+        result = linear_graphql_tool(self.client(transport), "{ viewer { id } } { team { id } }")
+
+        self.assertFalse(result["success"])
+        self.assertEqual("invalid_input", result["error"]["code"])
+        self.assertIn("exactly_one_operation", result["error"]["message"])
+        self.assertEqual([], transport.calls)
+
+    def test_linear_graphql_tool_ignores_escaped_block_string_terminator(self):
+        transport = RecordingTransport([GraphQLResponse(200, {"data": {"viewer": {"id": "viewer-1"}}})])
+
+        result = linear_graphql_tool(
+            self.client(transport),
+            'query Search { viewer { id } search(text: """before \\""" { notAnOperation } after""") { id } }',
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual({"data": {"viewer": {"id": "viewer-1"}}}, result["response"])
 
     def test_linear_graphql_tool_returns_transport_failure_payload(self):
         class FailingTransport:

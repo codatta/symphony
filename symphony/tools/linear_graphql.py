@@ -70,10 +70,10 @@ def _parse_input(tool_input: Any) -> tuple[str, dict[str, Any]]:
     raw_variables = tool_input.get("variables", {})
     if raw_variables is None:
         raw_variables = {}
-    if not isinstance(raw_variables, dict):
+    if not isinstance(raw_variables, Mapping):
         raise LinearGraphQLToolInputError("variables_must_be_object")
 
-    return raw_query.strip(), raw_variables
+    return raw_query.strip(), dict(raw_variables)
 
 
 def _validate_single_operation(query: str) -> None:
@@ -102,6 +102,8 @@ def _count_graphql_operations(query: str) -> int:
         if token == "}":
             seen_significant_token = True
             depth = max(depth - 1, 0)
+            if depth == 0:
+                seen_significant_token = False
             continue
 
         seen_significant_token = True
@@ -173,8 +175,14 @@ def _skip_string(query: str, index: int) -> int:
 
 
 def _skip_block_string(query: str, index: int) -> int:
-    end = query.find('"""', index)
-    return len(query) if end == -1 else end + 3
+    while index < len(query):
+        if query.startswith('\\"""', index):
+            index += 4
+            continue
+        if query.startswith('"""', index):
+            return index + 3
+        index += 1
+    return len(query)
 
 
 def _failure(code: str, message: str) -> dict[str, Any]:

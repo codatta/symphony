@@ -240,15 +240,8 @@ class LinearClient:
     def graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         body = self.graphql_raw(query, variables)
 
-        token = None
-        try:
-            token = self.token_store.resolve_linear_token()
-        except MissingLinearTokenError:
-            pass
-
         if "errors" in body:
-            errors = redact_secret(body["errors"], [token])
-            raise LinearGraphQLError(errors)
+            raise LinearGraphQLError(body["errors"])
 
         return body
 
