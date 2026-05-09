@@ -205,7 +205,7 @@ class LinearClient:
         requested_order = {issue_id: index for index, issue_id in enumerate(ids)}
         return sorted(issues, key=lambda issue: requested_order.get(issue.id, len(requested_order)))
 
-    def graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+    def graphql_raw(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         variables = variables or {}
         payload = {"query": query, "variables": variables}
 
@@ -233,10 +233,17 @@ class LinearClient:
             raise LinearUnknownPayloadError("linear_unknown_payload")
 
         if "errors" in response.body:
-            errors = redact_secret(response.body["errors"], [token])
-            raise LinearGraphQLError(errors)
+            return _redact_payload(response.body, [token])
 
         return response.body
+
+    def graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+        body = self.graphql_raw(query, variables)
+
+        if "errors" in body:
+            raise LinearGraphQLError(body["errors"])
+
+        return body
 
 
 def normalize_issue(raw: dict[str, Any]) -> Issue:
@@ -370,3 +377,13 @@ def _parse_datetime(value: Any) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _redact_payload(value: Any, secrets: list[str | None]) -> Any:
+    if isinstance(value, dict):
+        return {key: _redact_payload(item, secrets) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_payload(item, secrets) for item in value]
+    if isinstance(value, str):
+        return redact_secret(value, secrets)
+    return value

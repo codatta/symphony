@@ -46,6 +46,14 @@ change product intent, behavior, workflow, or release expectations.
 - Update docs in the same change when behavior, configuration, or workflow
   contracts change.
 
+## Python Environment
+
+- Use `uv` to manage Python dependencies, lockfiles, virtual environments, and
+  Python test runs.
+- Prefer `uv add`, `uv remove`, `uv sync`, and `uv run ...` over direct `pip`,
+  `python -m venv`, or ad hoc virtualenv commands.
+- Keep the `uv.lock` file updated whenever Python dependencies change.
+
 ## Validation
 
 - Run targeted checks while iterating.
