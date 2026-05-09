@@ -552,6 +552,12 @@ the result.
   and attach PR links using Symphony-managed Linear auth.
 - Orchestrator poll loop, dispatch, claims, bounded concurrency, retry/backoff,
   reconciliation, and cleanup.
+  - **IN-169 implementation reference:** first deliver the runner-neutral
+    state-machine core as a pure Python module. It owns candidate ordering,
+    dispatch eligibility, claim tracking, global and per-state concurrency,
+    retry/backoff entries, stall detection, and reconciliation actions. The
+    later daemon loop will call this module when tracker, workspace, and runner
+    adapters are wired together.
 - Per-issue workspace lifecycle manager with sanitized paths, lifecycle hooks,
   and root containment safety checks.
   - **IN-171 implementation reference:** create and reuse deterministic
@@ -561,6 +567,12 @@ the result.
     with `keep_on_failure` for debugging failed runs.
 - `AgentRunner` abstraction, `CLIAgentRunner` base, and Codex app-server
   JSON-RPC adapter.
+  - **IN-171 implementation reference:** define runner-neutral session,
+    event, token usage, turn result, and task result models before implementing
+    provider-specific runners. The first contract slice includes abstract
+    session-oriented `AgentRunner`/`CLIAgentRunner` classes and one-shot
+    `APIAgentRunner` classes; concrete Codex subprocess behavior remains a
+    follow-up ticket.
 - Minimal HTTP/status surface: `/api/v1/state`, `/api/v1/<identifier>`,
   `/api/v1/refresh`, `/api/v1/health`, and recent log access.
 
