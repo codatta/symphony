@@ -9,6 +9,9 @@ dependencies = [
   "watchfiles>=0.21",
 ]
 
+[project.scripts]
+symphony = "symphony.cli:main"
+
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
