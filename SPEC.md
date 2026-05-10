@@ -764,7 +764,11 @@ Retry handling behavior:
 
 1. Fetch active candidate issues (not all issues).
 2. Find the specific issue by `issue_id`.
-3. If not found, release claim.
+3. If not found:
+   - If the retry is a successful continuation retry, refresh that specific issue by ID.
+   - If the refreshed issue is in a terminal state, run terminal workspace cleanup before releasing
+     the claim.
+   - Otherwise, release the claim without workspace cleanup.
 4. If found and still candidate-eligible:
    - Dispatch if slots are available.
    - Otherwise requeue with error `no available orchestrator slots`.
@@ -772,10 +776,12 @@ Retry handling behavior:
 
 Note:
 
-- Terminal-state workspace cleanup is handled by startup cleanup and active-run reconciliation
-  (including terminal transitions for currently running issues).
-- Retry handling mainly operates on active candidates and releases claims when the issue is absent,
-  rather than performing terminal cleanup itself.
+- Terminal-state workspace cleanup is handled by startup cleanup, active-run reconciliation
+  (including terminal transitions for currently running issues), and successful continuation retries
+  that disappear from active candidate polling after the agent moves the issue to a terminal state.
+- Retry handling mainly operates on active candidates and releases claims when the issue is absent.
+  It performs the extra by-ID refresh only for successful continuation retries so the normal
+  successful-completion path does not leak terminal workspaces.
 
 ### 8.5 Active Run Reconciliation
 
@@ -822,7 +828,9 @@ Per-issue workspace path:
 Workspace persistence:
 
 - Workspaces are reused across runs for the same issue.
-- Successful runs do not auto-delete workspaces.
+- Successful runs do not delete workspaces immediately. The continuation retry remains claimed long
+  enough to observe the tracker's next state; if that issue has become terminal and is no longer an
+  active candidate, the runtime cleans the terminal workspace before releasing the claim.
 
 ### 9.2 Workspace Creation and Reuse
 

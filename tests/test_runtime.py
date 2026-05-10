@@ -56,8 +56,9 @@ class ManualClock:
 
 
 class FakeTracker:
-    def __init__(self, candidates: list[Issue]) -> None:
+    def __init__(self, candidates: list[Issue], *, states: list[Issue] | None = None) -> None:
         self.candidates = candidates
+        self.states = states
         self.fetch_calls = 0
         self.refresh_calls: list[list[str]] = []
 
@@ -67,7 +68,8 @@ class FakeTracker:
 
     async def fetch_issue_states_by_ids(self, issue_ids: list[str]) -> list[Issue]:
         self.refresh_calls.append(issue_ids)
-        by_id = {item.id: item for item in self.candidates}
+        source = self.candidates if self.states is None else self.states
+        by_id = {item.id: item for item in source}
         return [by_id[issue_id] for issue_id in issue_ids if issue_id in by_id]
 
 
@@ -295,6 +297,34 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(("IN-200",), result.released)
         self.assertNotIn("issue-1", runtime.state.retry_attempts)
         self.assertNotIn("issue-1", runtime.state.claimed)
+
+    async def test_successful_retry_missing_from_candidates_cleans_terminal_workspace(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            terminal_issue = issue(state="Done")
+            workspace_manager = FakeWorkspaceManager(Path(temp_dir) / "workspaces")
+            runtime = SymphonyRuntime(
+                config=make_config(Path(temp_dir) / "workspaces"),
+                prompt_template="Work",
+                tracker=FakeTracker([], states=[terminal_issue]),
+                workspace_manager=workspace_manager,
+                runner=FakeSessionRunner(),
+                clock_ms=ManualClock(10_000),
+            )
+            runtime.state.retry_attempts[terminal_issue.id] = RetryEntry(
+                issue_id=terminal_issue.id,
+                identifier=terminal_issue.identifier,
+                attempt=1,
+                due_at_ms=10_000,
+                error=None,
+            )
+            runtime.state.claimed.add(terminal_issue.id)
+
+            result = await runtime.run_tick()
+
+        self.assertEqual((terminal_issue.identifier,), result.released)
+        self.assertIn(("cleanup", terminal_issue.identifier), workspace_manager.calls)
+        self.assertEqual([[terminal_issue.id]], runtime.tracker.refresh_calls)
+        self.assertNotIn(terminal_issue.id, runtime.state.retry_attempts)
 
     async def test_api_runner_path_uses_run_task_contract(self):
         with tempfile.TemporaryDirectory() as temp_dir:

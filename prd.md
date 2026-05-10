@@ -601,6 +601,15 @@ issue to Codex remains unproven because there were no active candidate issues
 during the smoke test. That proof should be treated as a Phase 2 entry gate, not
 as a reason to keep expanding Phase 1 scope.
 
+**Review follow-up — 2026-05-11:** PR #7 review found three Phase 1 integration
+gaps. The CLI daemon now starts the loopback status API listener in normal daemon
+mode, reloads changed `WORKFLOW.md` config/prompt before poll ticks so future
+dispatch uses the latest workflow contract, and cleans terminal workspaces when a
+successful continuation retry disappears from active candidate polling after the
+agent moves the tracker issue to a terminal state. This keeps successful handoff
+cleanup aligned with the workspace lifecycle goal while preserving immediate
+workspace reuse during active runs.
+
 **MVP usage flow:**
 
 1. Install the Python package in a local environment.
