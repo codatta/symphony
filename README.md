@@ -21,6 +21,177 @@ OpenAI published a language-agnostic [`SPEC.md`](SPEC.md) and one experimental r
 
 ---
 
+## Get Started: CLI MVP
+
+The current working slice is the **Python CLI MVP for Linear + Codex**. It can
+load a repository `WORKFLOW.md`, poll Linear for active issues, prepare an
+isolated per-issue workspace, run a Codex app-server turn, and maintain retry /
+reconciliation state.
+
+The desktop app, OAuth setup flow, Linear webhooks, richer dashboard, and
+additional agent backends are planned follow-on phases.
+
+### Requirements
+
+- Python 3.12+
+- [`uv`](https://docs.astral.sh/uv/) for dependency and command execution
+- A Linear API key with access to the target project
+- Codex CLI authenticated locally and able to run `codex app-server`
+- A repository-owned `WORKFLOW.md`
+
+### Install Dependencies
+
+```bash
+uv sync
+```
+
+### Generate A Workflow
+
+Use the onboarding command for the normal first run:
+
+```bash
+uv run symphony init --project-slug your-linear-project-slug
+```
+
+This writes `WORKFLOW.md` from the default `codex-safe` preset and can store a
+Linear API key in the local Symphony credential file instead of the repository.
+For non-interactive setup:
+
+```bash
+uv run symphony init \
+  --yes \
+  --project-slug your-linear-project-slug \
+  --linear-api-key lin_api_...
+```
+
+Available presets are `codex-safe`, `codex-autonomous`, and `review-only`.
+
+### Create A WORKFLOW.md
+
+You can also create or edit `WORKFLOW.md` manually. A minimal CLI MVP workflow
+looks like this:
+
+```yaml
+---
+tracker:
+  kind: linear
+  project_slug: "your-linear-project-slug"
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Canceled
+    - Duplicate
+
+polling:
+  interval_ms: 30000
+
+workspace:
+  root: ~/code/symphony-workspaces
+
+agent:
+  max_concurrent_agents: 1
+  max_turns: 20
+
+codex:
+  command: codex app-server
+  approval_policy: never
+  thread_sandbox: workspace-write
+---
+
+You are working on Linear issue {{ issue.identifier }}.
+
+Title: {{ issue.title }}
+State: {{ issue.state }}
+URL: {{ issue.url }}
+
+Description:
+{{ issue.description }}
+
+Work only inside the provided workspace. When finished, report the changes and
+validation evidence. If the `linear_graphql` tool is available, post progress
+back to the issue.
+```
+
+Use workspace hooks when you need each issue workspace to clone or bootstrap a
+repo before Codex runs:
+
+```yaml
+hooks:
+  after_create: |
+    git clone https://github.com/your-org/your-repo .
+  before_run: |
+    uv sync
+  after_run: |
+    git status --short
+```
+
+### Configure Linear Auth
+
+The CLI MVP uses a Linear API key. `symphony init` can store it in
+`~/.config/symphony/credentials.json`, or you can provide it through the
+environment:
+
+```bash
+export LINEAR_API_KEY=lin_api_...
+```
+
+You can also put `tracker.api_key: "$LINEAR_API_KEY"` in `WORKFLOW.md`. Keep raw
+tokens out of committed workflow files.
+
+### Validate Configuration
+
+```bash
+uv run symphony doctor /path/to/WORKFLOW.md
+```
+
+Expected result:
+
+- workflow parses successfully
+- Linear token resolves
+- Codex command is available
+- workspace root is writable
+- logs root and status API port are printed
+
+### Run One Poll Tick
+
+Use `--once` for smoke tests and controlled live-dispatch proof:
+
+```bash
+uv run symphony run /path/to/WORKFLOW.md --once --log-level INFO
+```
+
+This fetches candidate Linear issues, dispatches eligible active issues, waits
+for started workers in that tick, and prints a summary like:
+
+```text
+Tick OK: fetched=1 dispatched=1 completed=1 failed=0 released=0
+```
+
+### Run The Poll Loop
+
+For continuous local operation:
+
+```bash
+uv run symphony run /path/to/WORKFLOW.md --port 7337 --logs-root ./log --log-level INFO
+```
+
+Stop the process with `Ctrl-C`.
+
+### Useful Validation Commands
+
+```bash
+uv run python -m unittest discover -s tests -p 'test_*.py'
+uv run symphony --help
+git diff --check
+```
+
+See [`test-plan-epic-2.md`](test-plan-epic-2.md) for the live-dispatch test
+plan used to close the remaining Phase 1 proof gap.
+
+---
+
 ## What This Implementation Adds
 
 The Elixir reference implementation requires Elixir/OTP expertise and a developer-CLI workflow. This implementation's goal is simpler:
@@ -29,13 +200,13 @@ The Elixir reference implementation requires Elixir/OTP expertise and a develope
 
 | Capability | Original (Elixir) | This implementation |
 |---|---|---|
-| Agent backend | Codex only | Codex, Claude Code, Gemini, Hermes/Ollama, GPT-Image-1 |
-| Installation | `mix setup` + CLI | `.dmg` drag-to-install (no Python required) |
-| First-run setup | Hand-edit WORKFLOW.md | Guided setup wizard |
-| Linear auth | Personal API key | OAuth 2.0 + API key |
-| Issue updates | Polling (30 s) | Webhooks (< 1 s) + polling fallback |
-| Operator alerts | Dashboard only | Telegram / Slack push notifications |
-| Mobile approval | Not supported | Approve/reject agent actions from phone |
+| Agent backend | Codex only | Codex now; Claude Code, Gemini, Hermes/Ollama, GPT-Image-1 planned |
+| Installation | `mix setup` + CLI | Python CLI now; `.dmg` drag-to-install planned |
+| First-run setup | Hand-edit WORKFLOW.md | Hand-edit now; guided setup wizard planned |
+| Linear auth | Personal API key | API key now; OAuth 2.0 planned |
+| Issue updates | Polling (30 s) | Polling now; webhooks + polling fallback planned |
+| Operator alerts | Dashboard only | Status API handler now; Telegram / Slack planned |
+| Mobile approval | Not supported | Planned approval gates from phone |
 
 ---
 
@@ -99,7 +270,34 @@ stateDiagram-v2
 
 ## Key Features
 
-### Multiple AI agent backends
+### Available In The CLI MVP
+
+**Linear-driven dispatch.** Symphony reads active Linear issues, normalizes issue
+payloads, respects active/terminal states, and dispatches eligible work with
+bounded concurrency.
+
+**Repository-owned workflow contract.** Runtime policy lives in `WORKFLOW.md`:
+tracker settings, polling interval, workspace root, lifecycle hooks, Codex
+command, sandbox policy, and the prompt template rendered for each issue.
+
+**Per-issue workspace lifecycle.** Each issue gets a deterministic isolated
+workspace under `workspace.root`. Workspace keys are sanitized, root containment
+is enforced, hooks can run at lifecycle boundaries, and terminal cleanup is
+supported.
+
+**Codex app-server runner.** The current concrete runner launches Codex in
+app-server mode, sends rendered issue prompts, normalizes events, handles
+timeouts/malformed frames, tracks token usage, and cleans up subprocesses.
+
+**Linear tool routing.** The injected `linear_graphql` tool lets Codex post
+comments, update state, and attach PR links through Symphony-managed Linear
+auth without giving the agent a raw token.
+
+**Offline-testable status surface.** The minimal status API handler covers
+health, state, per-issue detail, and refresh behavior. Full dashboard/SSE
+operation is planned for a later phase.
+
+### Planned Agent Backends
 
 Configure any agent in `WORKFLOW.md`:
 
@@ -109,19 +307,31 @@ agent:
   model: claude-sonnet-4-6
 ```
 
-All runners expose the same event interface to the orchestrator. The `linear_graphql` client-side tool (from `SPEC.md §10.5`) is available to every agent — they can update issue state, post comments, and attach PR links without holding a raw Linear token.
+All runners will expose the same event interface to the orchestrator. The
+`linear_graphql` client-side tool (from `SPEC.md §10.5`) is intended to be
+available to every agentic runner, so agents can update issue state, post
+comments, and attach PR links without holding a raw Linear token.
 
 ### Linear as the primary interface
 
-Issues are goals. States are workflow stages. Symphony connects to Linear via OAuth 2.0 or a personal API key, registers a webhook for real-time state change notification (< 1 s reaction), and exposes a setup wizard that generates a valid `WORKFLOW.md` from a UI form.
+Issues are goals. States are workflow stages. The CLI MVP connects to Linear
+with a personal API key and polls for active issues. OAuth 2.0, webhook
+registration, and a setup wizard are Phase 2 productionization work.
 
 ### Mac desktop app
 
-Distributed as a signed `.dmg` — no Python, no terminal. The Tauri v2 shell manages the Python daemon as a bundled sidecar, renders the web dashboard in a native window, shows a menubar icon with live agent count, and fires native macOS notifications when agents need attention.
+Planned distribution is a signed `.dmg` with no Python or terminal setup. The
+Tauri v2 shell will manage the Python daemon as a bundled sidecar, render the
+web dashboard in a native window, show a menubar icon with live agent count, and
+fire native macOS notifications when agents need attention.
 
 ### IM remote control (Telegram / Slack)
 
-Symphony sends push notifications to a configured Telegram group or Slack channel for key events: issue moved to Human Review, agent blocked, stall timeout, worker failed, approval requested. Operators can approve or reject agent action gates directly from their phone with inline action buttons.
+Planned IM integrations will send push notifications to a configured Telegram
+group or Slack channel for key events: issue moved to Human Review, agent
+blocked, stall timeout, worker failed, approval requested. Operators will be
+able to approve or reject agent action gates directly from their phone with
+inline action buttons.
 
 ```
 "MT-60 requesting approval: `git push --force`"
@@ -130,7 +340,9 @@ Symphony sends push notifications to a configured Telegram group or Slack channe
 
 ### WORKFLOW.md as the team contract
 
-Runtime behavior — prompt template, poll interval, concurrency limits, agent config, workspace hooks — lives in a `WORKFLOW.md` file versioned with the codebase. Changes are detected and re-applied without restarting the service.
+Runtime behavior -- prompt template, poll interval, concurrency limits, Codex
+config, and workspace hooks -- lives in a `WORKFLOW.md` file versioned with the
+codebase.
 
 ---
 
@@ -172,10 +384,16 @@ Runtime behavior — prompt template, poll interval, concurrency limits, agent c
 
 ## Status
 
-This implementation is under active design. See [`prd.md`](prd.md) for the full product requirements and build queue, and [`ARCHITECTURE.md`](ARCHITECTURE.md) for the detailed system design.
+This implementation has a working CLI-first MVP for Linear + Codex and is
+moving into Phase 2 productionization. See [`prd.md`](prd.md) for the full
+product requirements and build queue, [`ARCHITECTURE.md`](ARCHITECTURE.md) for
+the detailed system design, and [`test-plan-epic-2.md`](test-plan-epic-2.md)
+for the live-dispatch closeout plan.
 
 > [!WARNING]
-> Not yet ready for production use. Design phase in progress.
+> Not yet ready for production use. The CLI MVP is available for local testing;
+> desktop packaging, OAuth, webhooks, and the full operator dashboard are still
+> planned work.
 
 ---
 

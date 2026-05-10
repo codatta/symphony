@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from symphony.auth import MissingLinearTokenError, TokenStore
+from symphony.auth import MissingLinearTokenError, TokenStore, save_local_linear_token
 from symphony.config import ConfigError, TrackerConfig, WorkflowConfig
 from symphony.workflow import WorkflowError, WorkflowReloader, parse_workflow, render_prompt, watch_workflow
 
@@ -49,10 +49,25 @@ You are working on {{ issue.identifier }}.
         self.assertEqual("referenced-token", token)
 
     def test_empty_token_is_missing(self):
-        config = TrackerConfig.from_mapping({"tracker": {"api_key": "$WORKFLOW_LINEAR_KEY"}})
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = TrackerConfig.from_mapping({"tracker": {"api_key": "$WORKFLOW_LINEAR_KEY"}})
 
-        with self.assertRaisesRegex(MissingLinearTokenError, "missing_tracker_api_key"):
-            TokenStore(config, environ={"WORKFLOW_LINEAR_KEY": "  "}).resolve_linear_token()
+            with self.assertRaisesRegex(MissingLinearTokenError, "missing_tracker_api_key"):
+                TokenStore(
+                    config,
+                    environ={"WORKFLOW_LINEAR_KEY": "  "},
+                    credentials_path=Path(temp_dir) / "missing.json",
+                ).resolve_linear_token()
+
+    def test_token_resolution_falls_back_to_local_credentials_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            credentials_path = Path(temp_dir) / "credentials.json"
+            save_local_linear_token("stored-token", path=credentials_path)
+            config = TrackerConfig.from_mapping({"tracker": {"kind": "linear"}})
+
+            token = TokenStore(config, environ={}, credentials_path=credentials_path).resolve_linear_token()
+
+            self.assertEqual("stored-token", token)
 
     def test_workflow_config_resolves_core_defaults_and_relative_workspace_root(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -2,7 +2,7 @@ import asyncio
 import urllib.request
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
@@ -12,6 +12,7 @@ from symphony.cli import (
     create_runtime,
     create_status_api,
     create_status_http_server,
+    doctor_checks,
     load_startup_context,
     main,
     run_once,
@@ -74,7 +75,12 @@ Body
             )
 
             with self.assertRaisesRegex(StartupError, "missing_tracker_api_key"):
-                load_startup_context(workflow_path, logs_root="log", port=7337, environ={})
+                load_startup_context(
+                    workflow_path,
+                    logs_root="log",
+                    port=7337,
+                    environ={"XDG_CONFIG_HOME": temp_dir},
+                )
 
     def test_check_mode_reports_valid_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -95,6 +101,83 @@ Body
                 result = main([str(workflow_path), "--check", "--log-level", "WARNING"])
 
             self.assertEqual(0, result)
+
+    def test_run_subcommand_preserves_check_mode(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow_path = Path(temp_dir) / "WORKFLOW.md"
+            workflow_path.write_text(
+                """---
+tracker:
+  kind: linear
+  api_key: literal-token
+  project_slug: symphony-ai-agent-orchestration
+---
+Body
+""",
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                result = main(["run", str(workflow_path), "--check", "--log-level", "WARNING"])
+
+            self.assertEqual(0, result)
+
+    def test_init_subcommand_writes_workflow_and_local_credentials(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow_path = root / "WORKFLOW.md"
+            credentials_path = root / "credentials.json"
+
+            with redirect_stdout(StringIO()):
+                result = main(
+                    [
+                        "init",
+                        "--yes",
+                        "--project-slug",
+                        "symphony-ai-agent-orchestration",
+                        "--workflow-path",
+                        str(workflow_path),
+                        "--credentials-path",
+                        str(credentials_path),
+                        "--linear-api-key",
+                        "lin_secret",
+                    ]
+                )
+
+            self.assertEqual(0, result)
+            self.assertIn("project_slug: symphony-ai-agent-orchestration", workflow_path.read_text(encoding="utf-8"))
+            self.assertIn("lin_secret", credentials_path.read_text(encoding="utf-8"))
+
+    def test_init_yes_requires_project_slug_without_prompting(self):
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                main(["init", "--yes"])
+
+        self.assertEqual(2, raised.exception.code)
+
+    def test_doctor_checks_validate_command_and_workspace(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workflow_path = root / "WORKFLOW.md"
+            workflow_path.write_text(
+                """---
+tracker:
+  kind: linear
+  api_key: literal-token
+  project_slug: symphony-ai-agent-orchestration
+workspace:
+  root: workspaces
+codex:
+  command: python --version
+---
+Body
+""",
+                encoding="utf-8",
+            )
+
+            checks = doctor_checks(workflow_path, logs_root="log", port=7337)
+
+            self.assertTrue(all(ok for ok, _, _ in checks))
 
     def test_status_api_uses_runtime_snapshot_and_refresh_callback(self):
         class FakeRuntime:
@@ -223,7 +306,11 @@ First prompt.
             )
             context = load_startup_context(workflow_path, logs_root="log", port=7337)
             runtime = create_runtime(context)
-            reloader = RuntimeWorkflowReloader.from_context(runtime, context, environ={})
+            reloader = RuntimeWorkflowReloader.from_context(
+                runtime,
+                context,
+                environ={"XDG_CONFIG_HOME": temp_dir},
+            )
 
             workflow_path.write_text(
                 """---
