@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from symphony.orchestrator import (
     complete_worker_failure,
     complete_worker_success,
     dispatch_issue,
+    is_terminal_state,
     reconcile_refreshed_issues,
     release_issue,
     select_dispatchable,
@@ -24,6 +26,7 @@ from symphony.tracker.models import Issue
 from symphony.workflow import WorkflowDefinition, render_prompt
 
 
+LOGGER = logging.getLogger(__name__)
 StateCallback = Callable[[OrchestratorState], Any]
 
 
@@ -74,7 +77,7 @@ class SymphonyRuntime:
         await self.reconcile_running(now_ms=now_ms)
         candidates = list(await _maybe_await(self.tracker.fetch_candidate_issues()))
 
-        released = self._release_due_retries_missing_from_candidates(candidates)
+        released = await self._release_due_retries_missing_from_candidates(candidates)
         dispatched_issues = self._dispatch_due_retries(candidates, now_ms=now_ms)
 
         remaining = [issue for issue in candidates if issue.id not in {item.id for item in dispatched_issues}]
@@ -128,15 +131,35 @@ class SymphonyRuntime:
     def snapshot(self) -> OrchestratorState:
         return self.state
 
-    def _release_due_retries_missing_from_candidates(self, candidates: list[Issue]) -> list[str]:
+    async def _release_due_retries_missing_from_candidates(self, candidates: list[Issue]) -> list[str]:
         candidate_ids = {issue.id for issue in candidates}
+        missing_retries = [
+            retry
+            for retry in self.state.retry_attempts.values()
+            if retry.issue_id not in candidate_ids
+        ]
+        await self._cleanup_terminal_success_retries(missing_retries)
+
         released: list[str] = []
-        for retry in list(self.state.retry_attempts.values()):
-            if retry.issue_id in candidate_ids:
-                continue
+        for retry in list(missing_retries):
             release_issue(retry.issue_id, self.state)
             released.append(retry.identifier)
         return released
+
+    async def _cleanup_terminal_success_retries(self, retries: list[Any]) -> None:
+        success_retry_ids = {retry.issue_id for retry in retries if retry.error is None}
+        if not success_retry_ids:
+            return
+
+        try:
+            refreshed = list(await _maybe_await(self.tracker.fetch_issue_states_by_ids(list(success_retry_ids))))
+        except Exception as exc:  # noqa: BLE001 - cleanup is best-effort and must not crash polling.
+            LOGGER.warning("Unable to refresh missing successful retries before cleanup: %s", exc)
+            return
+
+        for issue in refreshed:
+            if issue.id in success_retry_ids and is_terminal_state(issue, self.state):
+                await _maybe_await(self.workspace_manager.cleanup(issue.identifier))
 
     def _dispatch_due_retries(self, candidates: list[Issue], *, now_ms: int) -> list[Issue]:
         by_id = {issue.id: issue for issue in candidates}
