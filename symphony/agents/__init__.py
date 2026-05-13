@@ -12,6 +12,7 @@ from symphony.agents.base import (
     TokenUsage,
     TurnResult,
 )
+from symphony.agents.claude_code import ClaudeCodeRunner
 from symphony.agents.codex import CodexRunner
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "AgentSession",
     "BaseRunner",
     "CLIAgentRunner",
+    "ClaudeCodeRunner",
     "CodexRunner",
     "TaskResult",
     "TokenUsage",

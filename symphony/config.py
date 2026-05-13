@@ -21,6 +21,9 @@ DEFAULT_CODEX_COMMAND = "codex app-server"
 DEFAULT_CODEX_TURN_TIMEOUT_MS = 3_600_000
 DEFAULT_CODEX_READ_TIMEOUT_MS = 5_000
 DEFAULT_CODEX_STALL_TIMEOUT_MS = 300_000
+DEFAULT_CLAUDE_COMMAND = "claude"
+DEFAULT_CLAUDE_TURN_TIMEOUT_MS = 3_600_000
+DEFAULT_CLAUDE_PERMISSION_MODE = "bypassPermissions"
 
 
 class ConfigError(ValueError):
@@ -120,10 +123,14 @@ class AgentConfig:
     max_turns: int = DEFAULT_MAX_TURNS
     max_retry_backoff_ms: int = DEFAULT_MAX_RETRY_BACKOFF_MS
     max_concurrent_agents_by_state: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+    runner: str = "codex"
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "AgentConfig":
         agent = _mapping(config.get("agent"), "agent_config_must_be_map")
+        runner = _string_value(agent.get("runner")) or "codex"
+        if runner not in ("codex", "claude_code"):
+            raise ConfigError(f"unsupported_agent_runner:{runner}")
         return cls(
             max_concurrent_agents=_positive_int(
                 agent.get("max_concurrent_agents"), DEFAULT_MAX_CONCURRENT_AGENTS, "agent_max_concurrent_agents"
@@ -133,6 +140,7 @@ class AgentConfig:
                 agent.get("max_retry_backoff_ms"), DEFAULT_MAX_RETRY_BACKOFF_MS, "agent_max_retry_backoff_ms"
             ),
             max_concurrent_agents_by_state=_state_limit_map(agent.get("max_concurrent_agents_by_state")),
+            runner=runner,
         )
 
 
@@ -173,6 +181,28 @@ class CodexConfig:
 
 
 @dataclass(frozen=True)
+class ClaudeCodeConfig:
+    command: str = DEFAULT_CLAUDE_COMMAND
+    model: str | None = None
+    permission_mode: str = DEFAULT_CLAUDE_PERMISSION_MODE
+    turn_timeout_ms: int = DEFAULT_CLAUDE_TURN_TIMEOUT_MS
+
+    @classmethod
+    def from_mapping(cls, config: Mapping[str, Any]) -> "ClaudeCodeConfig":
+        claude = _mapping(config.get("claude_code"), "claude_code_config_must_be_map")
+        return cls(
+            command=_string_value(claude.get("command")) or DEFAULT_CLAUDE_COMMAND,
+            model=_string_value(claude.get("model")),
+            permission_mode=_string_value(claude.get("permission_mode")) or DEFAULT_CLAUDE_PERMISSION_MODE,
+            turn_timeout_ms=_positive_int(
+                claude.get("turn_timeout_ms"),
+                DEFAULT_CLAUDE_TURN_TIMEOUT_MS,
+                "claude_code_turn_timeout_ms",
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class WorkflowConfig:
     tracker: TrackerConfig
     polling: PollingConfig = field(default_factory=PollingConfig)
@@ -182,6 +212,7 @@ class WorkflowConfig:
     hooks: HooksConfig = field(default_factory=HooksConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     codex: CodexConfig = field(default_factory=CodexConfig)
+    claude_code: ClaudeCodeConfig = field(default_factory=ClaudeCodeConfig)
 
     @classmethod
     def from_mapping(
@@ -199,6 +230,7 @@ class WorkflowConfig:
             hooks=HooksConfig.from_mapping(config),
             agent=AgentConfig.from_mapping(config),
             codex=CodexConfig.from_mapping(config),
+            claude_code=ClaudeCodeConfig.from_mapping(config),
         )
 
 
