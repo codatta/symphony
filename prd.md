@@ -554,6 +554,11 @@ the result.
   reconciliation, and cleanup.
 - Per-issue workspace lifecycle manager with sanitized paths, lifecycle hooks,
   and root containment safety checks.
+  - **IN-171 implementation reference:** create and reuse deterministic
+    workspaces under `workspace.root`, sanitize issue identifiers to
+    `[A-Za-z0-9._-]`, enforce root containment before agent launch or cleanup,
+    run configured lifecycle hooks with timeouts, and support terminal cleanup
+    with `keep_on_failure` for debugging failed runs.
 - `AgentRunner` abstraction, `CLIAgentRunner` base, and Codex app-server
   JSON-RPC adapter.
 - Minimal HTTP/status surface: `/api/v1/state`, `/api/v1/<identifier>`,
@@ -585,6 +590,26 @@ the result.
 - Logs and the minimal status API are sufficient to debug a session from issue
   id to agent result.
 
+**Closeout status — 2026-05-09:** Phase 1 is closed for planning purposes with
+one explicit caveat. The local implementation covers the CLI, workflow/config,
+Linear read path, `linear_graphql`, orchestration state, workspace lifecycle,
+runner contracts, Codex app-server runner, status API handler, and runtime
+single-tick glue. Validation passed with 100 Python tests, `symphony --help`,
+`git diff --check`, config preflight against `elixir/WORKFLOW.md`, and a live
+Linear polling tick that returned zero candidates. A live dispatch of one Linear
+issue to Codex remains unproven because there were no active candidate issues
+during the smoke test. That proof should be treated as a Phase 2 entry gate, not
+as a reason to keep expanding Phase 1 scope.
+
+**Review follow-up — 2026-05-11:** PR #7 review found three Phase 1 integration
+gaps. The CLI daemon now starts the loopback status API listener in normal daemon
+mode, reloads changed `WORKFLOW.md` config/prompt before poll ticks so future
+dispatch uses the latest workflow contract, and cleans terminal workspaces when a
+successful continuation retry disappears from active candidate polling after the
+agent moves the tracker issue to a terminal state. This keeps successful handoff
+cleanup aligned with the workspace lifecycle goal while preserving immediate
+workspace reuse during active runs.
+
 **MVP usage flow:**
 
 1. Install the Python package in a local environment.
@@ -598,7 +623,79 @@ the result.
    issue to the configured handoff state.
 8. The operator checks logs and the status API to verify the run.
 
-### 6.4 Phase 2: Standalone App And Linear Productionization
+### 6.4 Phase 2A: Standalone CLI Onboarding And Packaging
+
+**Linear issue:** IN-205 — Package Symphony as an easy-install standalone CLI
+with guided onboarding.
+
+**Goal:** Make the proven CLI MVP useful without requiring users to understand
+the internal daemon contract, hand-author `WORKFLOW.md`, or keep Linear secrets
+inside repository files.
+
+**Selected solution:**
+
+- Keep the runtime daemon architecture intact and add a productized CLI surface:
+  `symphony init`, `symphony doctor`, and `symphony run`.
+- `symphony init` generates a repository-owned `WORKFLOW.md` from presets. The
+  initial presets are `codex-safe`, `codex-autonomous`, and `review-only`.
+- CLI Linear auth starts with personal API keys stored outside the repo in a
+  local credentials file. Resolution order remains env var → WORKFLOW.md
+  indirection/literal → local credentials file. OAuth / PKCE remains the secure
+  production path for the desktop app and later CLI auth.
+- `symphony doctor` validates the generated workflow, resolved Linear auth,
+  Codex command availability, workspace writability, logs root, and status API
+  address before users run a live poll.
+- `symphony run` is the clear long-term command for the daemon while the legacy
+  `symphony WORKFLOW.md --once/--check` invocation remains compatible.
+- Package first through normal Python CLI channels (`uv tool install`, `pipx`,
+  and release artifacts). Native single-file binaries and Homebrew are follow-on
+  distribution channels once the command surface stabilizes.
+
+**Decision context:**
+
+- A desktop app remains valuable, but it is too large for the immediate usability
+  problem. A packaged CLI with guided onboarding removes most setup friction
+  while keeping the delivery slice small and testable.
+- Linear OAuth is still the preferred end-state, but personal API key onboarding
+  is enough to make the current Linear + Codex loop usable out of the box.
+- Presets are intentionally conservative. They encode safe concurrency,
+  sandbox, and polling defaults without hiding the generated `WORKFLOW.md` from
+  teams that want to review or version runtime policy.
+
+**Alternatives considered:**
+
+- Start directly with the Tauri desktop app. This improves non-terminal UX, but
+  delays packaging and onboarding improvements that are useful immediately.
+- Require OAuth before improving the CLI. This is more secure, but adds Linear
+  app registration, redirect handling, token refresh, and revocation before the
+  basic command surface is proven.
+- Hide `WORKFLOW.md` entirely behind CLI preferences. This reduces visible
+  configuration, but conflicts with Symphony's repository-owned workflow
+  contract and makes review harder.
+
+**Scope:**
+
+- CLI subcommands and backwards-compatible legacy invocation.
+- Local credentials-file fallback for Linear API keys with private file mode.
+- Workflow generation from smart presets and explicit project/state/workspace
+  inputs.
+- Doctor/preflight checks that produce actionable pass/fail output.
+- README and PR documentation for install and first-run usage.
+- Packaging metadata sufficient for `uv tool install` / `pipx` style installs.
+
+**Exit criteria:**
+
+- A new user can install Symphony as a CLI, run `symphony init`, store or provide
+  Linear auth without editing secrets into `WORKFLOW.md`, run `symphony doctor`,
+  and then run one poll tick with `symphony run --once`.
+- Generated workflows parse through the same production loader as hand-written
+  workflows.
+- Credential lookup works from env vars, explicit WORKFLOW references, and the
+  local credentials file.
+- Tests cover workflow generation, credential storage, doctor checks, and
+  backwards-compatible CLI startup.
+
+### 6.5 Phase 2B: Standalone App And Linear Productionization
 
 **Goal:** Make Symphony approachable and secure after the CLI MVP loop works.
 
@@ -629,7 +726,7 @@ the result.
 - Signed app can be installed through the normal macOS drag-to-Applications flow.
 - UI PRs include local test run notes and `.png` captures of changed screens.
 
-### 6.5 Phase 3: Operator Visibility And Approval
+### 6.6 Phase 3: Operator Visibility And Approval
 
 **Goal:** Give operators a usable day-to-day control surface before adding more
 agent backends.
@@ -651,7 +748,7 @@ agent backends.
 - Notification failures are isolated from orchestrator execution.
 - UI PRs include screenshot evidence for changed flows.
 
-### 6.6 Phase 4: Multi-Agent Runner Expansion
+### 6.7 Phase 4: Multi-Agent Runner Expansion
 
 **Goal:** Add non-Codex runners after the MVP session, tracker, and operator
 contracts are stable.
@@ -671,7 +768,7 @@ contracts are stable.
 - `linear_graphql` tool behavior is tested for every agentic runner.
 - Provider-specific rate limits and safety blocks surface in observability.
 
-### 6.7 Phase 5: IM Integrations And Distribution Expansion
+### 6.8 Phase 5: IM Integrations And Distribution Expansion
 
 **Goal:** Extend operator controls into team communication tools and broaden
 distribution after the standalone app is stable.
@@ -687,7 +784,7 @@ distribution after the standalone app is stable.
 - IM integrations can send key events and process approval/cancel actions.
 - UI and integration PRs include screenshot evidence for changed flows.
 
-### 6.8 Phase 6: Backlog And Expansion
+### 6.9 Phase 6: Backlog And Expansion
 
 **Goal:** Add optional tracker, sandboxing, persistence, and multimodal features
 after the primary product is usable.
@@ -713,6 +810,25 @@ after the primary product is usable.
 | UI | Local test run plus `.png` captures of impacted screens |
 | Desktop | Sidecar lifecycle, health polling, preferences persistence, packaging smoke test |
 
+### 6.10 Progress Review Routine
+
+Maintain a lightweight daily progress log when reviewing project status or
+choosing the next build items. Each review should inspect local docs, local git
+state, remote GitHub PRs, and corresponding Linear tickets, then write the
+summary to `daily/dev-log-YYYY-MM-DD-HHMMSS.md` using Hong Kong time.
+
+Each log should record:
+
+- remote PRs in review and recently merged PRs,
+- local uncommitted work and branch state,
+- relevant Linear project, milestone, and ticket statuses,
+- product-doc or tracker mismatches that need cleanup,
+- validation run during the review, and
+- the next five recommended build items.
+
+When the review exposes a process change or product-contract change, update this
+PRD in the same branch so the routine remains discoverable for future agents.
+
 ---
 
 ## 7. Build Queue
@@ -729,28 +845,58 @@ after the primary product is usable.
 
 ### 7.2 Phase 1: MVP — CLI Linear + Codex
 
-- [ ] **[Core: Python skeleton]** — package layout, CLI, logging, test harness,
-  core domain models.
-- [ ] **[Core: WORKFLOW.md parser]** — YAML front matter, Jinja2 prompt rendering,
+- [x] **[Core: Python skeleton]** — package layout, CLI, logging, test harness,
+  core domain models, and startup preflight.
+- [x] **[Core: WORKFLOW.md parser]** — YAML front matter, Jinja2 prompt rendering,
   `$VAR` resolution with named missing-variable errors, strict config validation,
   defaults, `~` expansion, and hot reload.
-- [ ] **[Linear: MVP auth + tracker read path]** — personal API key support,
+- [x] **[Linear: MVP auth + tracker read path]** — personal API key support,
   token redaction, candidate issue fetch, state refresh, pagination, and
   normalized issue model.
-- [ ] **[Linear: `linear_graphql` tool]** — scoped GraphQL tool for agent comments,
+- [x] **[Linear: `linear_graphql` tool]** — scoped GraphQL tool for agent comments,
   state transitions, and PR links using Symphony-managed auth.
-- [ ] **[Core: Orchestration state machine]** — poll loop, dispatch, claims,
-  bounded concurrency, retry/backoff, reconciliation, and cleanup.
-- [ ] **[Core: Workspace lifecycle]** — per-issue directories, sanitized paths,
-  lifecycle hooks, and root containment checks.
-- [ ] **[Agent: Runner base classes]** — `AgentRunner`, `CLIAgentRunner`, and
-  `APIAgentRunner` contracts.
-- [ ] **[Agent: Codex runner]** — Codex app-server JSON-RPC adapter with event
-  normalization, timeout/stall handling, and `linear_graphql` tool routing.
-- [ ] **[HTTP: Minimal status API]** — `/api/v1/state`,
-  `/api/v1/<identifier>`, `/api/v1/refresh`, and `/api/v1/health`.
+- [x] **[Core: Orchestration state machine] (Linear: IN-169)** — dispatch
+  ordering, eligibility, claims, bounded global/per-state concurrency,
+  retry/backoff entries, continuation retries, stall detection, and
+  reconciliation cleanup decisions. Runtime glue attaches polling and worker
+  execution to this state core.
+- [x] **[Core: Workspace lifecycle] (Linear: IN-171)** — per-issue directories,
+  sanitized paths, lifecycle hooks, root containment checks, and terminal
+  cleanup controls.
+- [x] **[Agent: Runner base classes] (Linear: IN-174)** — runner-neutral
+  session, event, token usage, turn result, and task result models plus
+  `AgentRunner`, `CLIAgentRunner`, and `APIAgentRunner` abstract contracts.
+- [x] **[Agent: Codex runner] (Linear: IN-175)** — Codex app-server JSON-RPC
+  adapter with event normalization, timeout/stall handling, approval handling,
+  malformed-frame handling, subprocess cleanup, and `linear_graphql` tool
+  routing through an injectable tool executor.
+- [x] **[HTTP: Minimal status API] (Linear: IN-172)** — framework-independent
+  status handler for `/api/v1/state`, `/api/v1/<identifier>`,
+  `/api/v1/refresh`, and `/api/v1/health`, plus a FastAPI factory for
+  environments where FastAPI is installed.
 
-### 7.3 Phase 2: Standalone App And Linear Productionization
+**Milestone status:** Closed with caveat. Live Linear auth and polling are
+verified; live Codex dispatch awaits a disposable active Linear issue and should
+be the first Phase 2 gate before desktop or productionization work expands.
+
+### 7.3 Phase 2A: Standalone CLI Onboarding And Packaging
+
+- [x] **[CLI: Onboarding commands] (Linear: IN-205)** — add `symphony init`,
+  `symphony doctor`, and `symphony run` while preserving legacy CLI startup.
+- [x] **[Auth: Local CLI credentials] (Linear: IN-205)** — resolve Linear API
+  keys from env vars, WORKFLOW references/literals, and a private local
+  credentials file.
+- [x] **[Config: Preset workflow generation] (Linear: IN-205)** — generate
+  parseable Linear + Codex `WORKFLOW.md` files from `codex-safe`,
+  `codex-autonomous`, and `review-only` presets.
+- [ ] **[Packaging: Easy install channels] (Linear: IN-205)** — publish
+  installation instructions and release artifacts for `uv tool install`, `pipx`,
+  native binary builds, and Homebrew once the command surface stabilizes.
+- [ ] **[Auth: Guided OAuth setup] (Linear: IN-205)** — add a CLI OAuth / PKCE
+  flow with status and revoke commands after the API-key onboarding path is
+  proven.
+
+### 7.4 Phase 2B: Standalone App And Linear Productionization
 
 - [ ] **[Desktop: App shell]** — Tauri shell, embedded web UI, Python sidecar
   start/stop, health polling, and local app preferences.
@@ -767,7 +913,7 @@ after the primary product is usable.
 - [ ] **[Desktop: Signed distribution]** — signed and notarized `.dmg`,
   drag-to-Applications install, app preferences hardening, and update feed.
 
-### 7.4 Phase 3: Operator Visibility And Approval
+### 7.5 Phase 3: Operator Visibility And Approval
 
 - [ ] **[HTTP: SSE event stream]** — typed runtime event stream for dashboards and
   future desktop shell.
@@ -778,7 +924,7 @@ after the primary product is usable.
 - [ ] **[Mobile: Approval gate]** — approve/reject endpoints and deep links that
   unblock or stop agent turns.
 
-### 7.5 Phase 4: Multi-Agent Runners
+### 7.6 Phase 4: Multi-Agent Runners
 
 - [ ] **[Agent: Claude Code]** — Anthropic/Claude Code runner with streaming,
   tool routing, token accounting, and normalized Symphony events.
@@ -789,7 +935,7 @@ after the primary product is usable.
 - [ ] **[Agent: GPT-Image-1]** — generative image runner after `task_type`
   semantics are finalized.
 
-### 7.6 Phase 5: IM Integrations And Distribution Expansion
+### 7.7 Phase 5: IM Integrations And Distribution Expansion
 
 - [ ] **[IM: Telegram bot]** — push notifications and inline approval/cancel
   actions.
