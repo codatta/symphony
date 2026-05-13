@@ -136,6 +136,7 @@ class ClaudeCodeRunner(CLIAgentRunner):
         cmd: list[str] = list(self.command)
         cmd += [
             "--print",
+            "--verbose",
             "--output-format", "stream-json",
             "--permission-mode", self.permission_mode,
             "--add-dir", str(workspace),
@@ -267,6 +268,9 @@ async def _drain_stderr(process: asyncio.subprocess.Process) -> None:
     if process.stderr is None:
         return
     try:
-        await process.stderr.read()
+        data = await process.stderr.read()
+        if data:
+            import logging
+            logging.getLogger(__name__).debug("claude stderr: %s", data.decode(errors="replace").strip())
     except Exception:
         pass
