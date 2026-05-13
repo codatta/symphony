@@ -1,4 +1,4 @@
-# Symphony — Python Implementation
+这个这个# Symphony — Python Implementation
 
 > A production-ready, out-of-box implementation of the [Symphony specification](SPEC.md) by OpenAI.
 > Licensed under the [Apache License 2.0](LICENSE).
@@ -91,6 +91,7 @@ workspace:
   root: ~/code/symphony-workspaces
 
 agent:
+  runner: codex            # codex (default) | claude_code
   max_concurrent_agents: 1
   max_turns: 20
 
@@ -297,20 +298,33 @@ auth without giving the agent a raw token.
 health, state, per-issue detail, and refresh behavior. Full dashboard/SSE
 operation is planned for a later phase.
 
-### Planned Agent Backends
+### Agent Backends
 
-Configure any agent in `WORKFLOW.md`:
+Switch agents with one line in `WORKFLOW.md`:
 
 ```yaml
 agent:
-  runner: claude_code      # codex | claude_code | gemini_api | openai_compatible | gpt_image
-  model: claude-sonnet-4-6
+  runner: claude_code      # codex (default) | claude_code
 ```
 
-All runners will expose the same event interface to the orchestrator. The
-`linear_graphql` client-side tool (from `SPEC.md §10.5`) is intended to be
-available to every agentic runner, so agents can update issue state, post
-comments, and attach PR links without holding a raw Linear token.
+**Codex** (default) — requires `codex app-server` and uses Codex's JSON-RPC
+app-server protocol.
+
+**Claude Code** — requires the `claude` CLI authenticated locally. Set
+`LINEAR_API_KEY` as usual; Symphony injects it into the subprocess so Claude
+can post comments and update issues via Bash without any extra configuration.
+
+```yaml
+agent:
+  runner: claude_code
+
+claude_code:               # all fields optional
+  model: claude-sonnet-4-6
+  turn_timeout_ms: 3600000
+```
+
+Additional backends (Gemini, OpenAI-compatible, GPT-Image-1) are planned. All
+runners expose the same event interface to the orchestrator.
 
 ### Linear as the primary interface
 
