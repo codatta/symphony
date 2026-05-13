@@ -286,6 +286,7 @@ async def run_once(runtime: SymphonyRuntime) -> RuntimeTickResult:
 
 
 async def run_poll_loop(runtime: SymphonyRuntime, *, before_tick: TickHook | None = None) -> None:
+    await runtime.record_startup_issues()
     while True:
         if before_tick is not None:
             result = before_tick()

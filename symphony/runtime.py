@@ -69,6 +69,8 @@ class SymphonyRuntime:
         self.clock_ms = clock_ms or _monotonic_epoch_ms
         self.on_event = on_event
         self.on_state_change = on_state_change
+        self._startup_issue_ids: set[str] = set()
+        self._startup_recorded: bool = False
 
     async def run_tick(self) -> RuntimeTickResult:
         """Poll Linear once, dispatch eligible issues, and wait for started workers."""
@@ -80,7 +82,11 @@ class SymphonyRuntime:
         released = await self._release_due_retries_missing_from_candidates(candidates)
         dispatched_issues = self._dispatch_due_retries(candidates, now_ms=now_ms)
 
-        remaining = [issue for issue in candidates if issue.id not in {item.id for item in dispatched_issues}]
+        eligible = [
+            issue for issue in candidates
+            if not self._startup_recorded or issue.id not in self._startup_issue_ids
+        ]
+        remaining = [issue for issue in eligible if issue.id not in {item.id for item in dispatched_issues}]
         for issue in select_dispatchable(remaining, self.state):
             dispatch_issue(issue, self.state, now_ms=now_ms)
             dispatched_issues.append(issue)
@@ -127,6 +133,13 @@ class SymphonyRuntime:
             if action.cleanup_workspace:
                 await _maybe_await(self.workspace_manager.cleanup(action.identifier))
         self._notify_state_change()
+
+    async def record_startup_issues(self) -> None:
+        """Snapshot currently active issues so they are not dispatched on the first tick."""
+        candidates = list(await _maybe_await(self.tracker.fetch_candidate_issues()))
+        self._startup_issue_ids = {issue.id for issue in candidates}
+        self._startup_recorded = True
+        LOGGER.info("Startup snapshot: %d pre-existing issue(s) will be skipped.", len(self._startup_issue_ids))
 
     def snapshot(self) -> OrchestratorState:
         return self.state
