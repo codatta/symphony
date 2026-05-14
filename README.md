@@ -71,10 +71,10 @@ symphony doctor --help
 symphony run --help
 ```
 
-Upgrade an existing `uv tool` install from the current checkout:
+Reinstall an existing `uv tool` install from the current checkout:
 
 ```bash
-uv tool upgrade symphony --reinstall-package symphony
+uv tool install --force .
 ```
 
 Remove the installed CLI:
@@ -97,12 +97,15 @@ uv build
 ls dist/
 ```
 
-Expected artifacts are a source distribution and wheel under `dist/`, for
-example `symphony-0.1.0.tar.gz` and `symphony-0.1.0-py3-none-any.whl`. Smoke
-test the wheel in an isolated CLI install:
+This release-prep command should be verified in a network-enabled environment
+before cutting a release tag, because build isolation may need to download the
+configured build backend. Expected artifacts are a source distribution and wheel
+under `dist/`, for example `symphony-<version>.tar.gz` and
+`symphony-<version>-py3-none-any.whl`. Smoke test the wheel in an isolated CLI
+install from a clean `dist/` directory:
 
 ```bash
-uv tool install --force ./dist/symphony-0.1.0-py3-none-any.whl
+uv tool install --force ./dist/symphony-*.whl
 symphony --help
 ```
 
