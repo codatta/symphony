@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import logging
 import time
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -217,7 +218,8 @@ class SymphonyRuntime:
             _attach_runtime_entry_metadata(entry, workspace_path=getattr(workspace, "path", None))
             await _maybe_await(self.workspace_manager.before_run(workspace))
 
-            prompt = render_prompt(self.prompt_template, issue=issue, attempt=entry.retry_attempt)
+            enriched_issue = await self._enrich_with_comments(issue)
+            prompt = render_prompt(self.prompt_template, issue=enriched_issue, attempt=entry.retry_attempt)
             if _is_api_runner(self.runner):
                 result = await self.runner.run_task(Path(workspace.path), prompt, issue, self._agent_event_handler)
             else:
@@ -258,6 +260,15 @@ class SymphonyRuntime:
             if session is not None and hasattr(self.runner, "stop_session"):
                 await _maybe_await(self.runner.stop_session(session))
             self._notify_state_change()
+
+    async def _enrich_with_comments(self, issue: Issue) -> Issue:
+        if not hasattr(self.tracker, "fetch_issue_comments"):
+            return issue
+        try:
+            comments = await _maybe_await(self.tracker.fetch_issue_comments(issue.id))
+            return dataclasses.replace(issue, comments=tuple(comments))
+        except Exception:
+            return issue
 
     async def _agent_event_handler(self, event: AgentEvent) -> None:
         issue_id = event.issue_id

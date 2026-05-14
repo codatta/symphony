@@ -16,6 +16,7 @@ class OnboardingTests(unittest.TestCase):
                 project_slug="symphony-ai-agent-orchestration",
                 preset="codex-safe",
                 workspace_root="~/.symphony/workspaces/symphony",
+                runner="codex",
             )
         )
 
@@ -25,6 +26,26 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(1, workflow.config["agent"]["max_concurrent_agents"])
         self.assertEqual("never", workflow.config["codex"]["approval_policy"])
         self.assertIn("{{ issue.identifier }}", workflow.prompt_template)
+
+    def test_generate_workflow_claude_runner_includes_pr_prompt(self):
+        content = generate_workflow(
+            InitConfig(
+                project_slug="my-project",
+                preset="codex-safe",
+                workspace_root="~/.symphony/workspaces/my-project",
+                runner="claude_code",
+                github_org="acme-corp",
+            )
+        )
+
+        workflow = parse_workflow(content)
+
+        self.assertEqual("claude_code", workflow.config["agent"]["runner"])
+        self.assertNotIn("codex", workflow.config)
+        self.assertIn("acme-corp", workflow.prompt_template)
+        self.assertIn("{{ issue.identifier }}", workflow.prompt_template)
+        self.assertIn("issue.comments", workflow.prompt_template)
+        self.assertIn("In Review", workflow.prompt_template)
 
     def test_default_workspace_root_sanitizes_project_slug(self):
         self.assertEqual("~/.symphony/workspaces/A-B-C.1", default_workspace_root(" A/B C.1 "))

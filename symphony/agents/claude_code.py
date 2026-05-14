@@ -55,12 +55,14 @@ class ClaudeCodeRunner(CLIAgentRunner):
         permission_mode: str = DEFAULT_PERMISSION_MODE,
         turn_timeout_ms: int = DEFAULT_TURN_TIMEOUT_MS,
         linear_api_key: str | None = None,
+        github_token: str | None = None,
     ) -> None:
         super().__init__(command)
         self.model = model
         self.permission_mode = permission_mode
         self.turn_timeout_ms = turn_timeout_ms
         self.linear_api_key = linear_api_key
+        self.github_token = github_token
 
     async def start_session(
         self,
@@ -153,6 +155,8 @@ class ClaudeCodeRunner(CLIAgentRunner):
         env = dict(os.environ)
         if self.linear_api_key:
             env["LINEAR_API_KEY"] = self.linear_api_key
+        if self.github_token:
+            env["GITHUB_TOKEN"] = self.github_token
         return env
 
     async def _read_events(

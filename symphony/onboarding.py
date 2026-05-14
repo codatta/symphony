@@ -12,6 +12,7 @@ DEFAULT_PRESET = "codex-safe"
 DEFAULT_WORKFLOW_PATH = "WORKFLOW.md"
 DEFAULT_ACTIVE_STATES = ("Todo", "In Progress")
 DEFAULT_TERMINAL_STATES = ("Done", "Canceled", "Duplicate")
+DEFAULT_RUNNER = "claude_code"
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,8 @@ class InitConfig:
     terminal_states: tuple[str, ...] = DEFAULT_TERMINAL_STATES
     workspace_root: str = "~/.symphony/workspaces"
     codex_command: str = "codex app-server"
+    runner: str = DEFAULT_RUNNER
+    github_org: str = ""
 
 
 class OnboardingError(ValueError):
@@ -77,7 +80,9 @@ def generate_workflow(config: InitConfig) -> str:
     workspace_root = _required(config.workspace_root, "missing_workspace_root")
     codex_command = _required(config.codex_command, "missing_codex_command")
 
-    front_matter = {
+    runner = config.runner or DEFAULT_RUNNER
+
+    front_matter: dict[str, object] = {
         "tracker": {
             "kind": "linear",
             "project_slug": project_slug,
@@ -87,17 +92,26 @@ def generate_workflow(config: InitConfig) -> str:
         "polling": {"interval_ms": preset.polling_interval_ms},
         "workspace": {"root": workspace_root},
         "agent": {
+            "runner": runner,
             "max_concurrent_agents": preset.max_concurrent_agents,
             "max_turns": preset.max_turns,
         },
-        "codex": {
+    }
+
+    if runner == "claude_code":
+        prompt = _CLAUDE_PR_PROMPT.replace("__GITHUB_ORG__", config.github_org or "YOUR_ORG")
+    else:
+        front_matter["codex"] = {
             "command": codex_command,
             "approval_policy": preset.approval_policy,
             "thread_sandbox": preset.thread_sandbox,
-        },
-    }
+        }
+        prompt = _CODEX_PROMPT
 
-    prompt = """You are working on Linear issue {{ issue.identifier }}.
+    return f"---\n{yaml.safe_dump(front_matter, sort_keys=False)}---\n\n{prompt}"
+
+
+_CODEX_PROMPT = """You are working on Linear issue {{ issue.identifier }}.
 
 Title: {{ issue.title }}
 State: {{ issue.state }}
@@ -110,7 +124,45 @@ Work only inside the provided workspace. Keep changes scoped to the issue.
 When finished, report changed files and validation evidence. If the
 linear_graphql tool is available, post meaningful progress back to Linear.
 """
-    return f"---\n{yaml.safe_dump(front_matter, sort_keys=False)}---\n\n{prompt}"
+
+_CLAUDE_PR_PROMPT = """\
+You are working on Linear issue {{ issue.identifier }}.
+
+Title: {{ issue.title }}
+State: {{ issue.state }}
+URL: {{ issue.url }}
+
+Description:
+{{ issue.description }}
+
+{% if issue.comments %}
+Review feedback — address each point before submitting:
+{% for comment in issue.comments %}
+- {{ comment }}
+{% endfor %}
+{% endif %}
+
+## Instructions
+
+1. The issue description specifies which repository to work on. Clone it:
+   git clone https://x-access-token:$GITHUB_TOKEN@github.com/__GITHUB_ORG__/REPO_NAME .
+
+2. Create a working branch:
+   git checkout -b fix/{{ issue.identifier | lower }}
+
+3. Implement the changes. Keep the scope to what the issue describes.
+
+4. Push and open a PR:
+   git push -u origin HEAD
+   gh pr create --title "{{ issue.title }}" --body "Resolves {{ issue.url }}"
+
+5. Post the PR URL as a comment on the Linear issue using LINEAR_API_KEY.
+
+6. Update the Linear issue state to "In Review" (query workflow states first to get the
+   state ID, then call issueUpdate with the state ID).
+
+Use $GITHUB_TOKEN for git authentication and $LINEAR_API_KEY for all Linear API calls.
+"""
 
 
 def write_workflow(path: str | Path, content: str, *, overwrite: bool = False) -> Path:
