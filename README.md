@@ -1,4 +1,4 @@
-这个这个# Symphony — Python Implementation
+# Symphony — Python Implementation
 
 > A production-ready, out-of-box implementation of the [Symphony specification](SPEC.md) by OpenAI.
 > Licensed under the [Apache License 2.0](LICENSE).
