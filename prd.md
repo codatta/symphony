@@ -504,7 +504,7 @@ change, Linear ticket updates, a PR, and review evidence.
    review from another agent instance where available. Iterate through comments,
    fixes, and follow-up reviews until there are no blocking comments.
 5. **UI-impact evidence is required.** For UI-impacted PRs, run the app locally
-   and attach `.png` captures of the changed screens. Committed screenshot
+   and attach `.png` captures of changed screens. Committed screenshot
    artifacts must use Git LFS or another configured storage-saving large-file
    mechanism.
 6. **Validation must be written down.** Each PR must list targeted checks, full
@@ -694,6 +694,12 @@ inside repository files.
   local credentials file.
 - Tests cover workflow generation, credential storage, doctor checks, and
   backwards-compatible CLI startup.
+
+**Packaging closeout — 2026-05-14:** Python packaging is complete for the
+stabilized CLI surface. The README now documents `uv tool install`, `pipx`,
+local checkout installs, wheel/sdist generation with `uv build`, and isolated
+wheel smoke testing. Native single-file binaries and Homebrew remain explicit
+follow-on distribution channels instead of Phase 2A blockers.
 
 ### 6.5 Phase 2B: Standalone App And Linear Productionization
 
@@ -889,9 +895,10 @@ be the first Phase 2 gate before desktop or productionization work expands.
 - [x] **[Config: Preset workflow generation] (Linear: IN-205)** — generate
   parseable Linear + Codex `WORKFLOW.md` files from `codex-safe`,
   `codex-autonomous`, and `review-only` presets.
-- [ ] **[Packaging: Easy install channels] (Linear: IN-205)** — publish
-  installation instructions and release artifacts for `uv tool install`, `pipx`,
-  native binary builds, and Homebrew once the command surface stabilizes.
+- [x] **[Packaging: Easy install channels] (Linear: IN-205)** — publish
+  installation instructions and release artifact workflow for `uv tool install`,
+  `pipx`, wheel, and sdist packaging. Native binary builds and Homebrew remain
+  follow-on distribution channels once the command surface stabilizes.
 - [ ] **[Auth: Guided OAuth setup] (Linear: IN-205)** — add a CLI OAuth / PKCE
   flow with status and revoke commands after the API-key onboarding path is
   proven.
