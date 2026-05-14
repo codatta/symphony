@@ -347,5 +347,56 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("task_completed", runtime.state.recent_events[0]["event"])
 
 
+    async def test_record_startup_issues_skips_preexisting_issues_on_first_tick(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pre_existing = issue("pre-1", "IN-300")
+            runtime = SymphonyRuntime(
+                config=make_config(Path(temp_dir) / "workspaces"),
+                prompt_template="Work on {{ issue.identifier }}",
+                tracker=FakeTracker([pre_existing]),
+                workspace_manager=FakeWorkspaceManager(Path(temp_dir) / "workspaces"),
+                runner=FakeSessionRunner(),
+                clock_ms=ManualClock(1_000),
+            )
+
+            await runtime.record_startup_issues()
+            result = await runtime.run_tick()
+
+        self.assertEqual((), result.dispatched)
+        self.assertEqual(1, result.fetched)
+
+    async def test_issue_reentering_after_startup_is_dispatched(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pre_existing = issue("pre-1", "IN-301")
+            clock = ManualClock(1_000)
+            runner = FakeSessionRunner()
+
+            # Startup: issue is active.
+            tracker = FakeTracker([pre_existing])
+            runtime = SymphonyRuntime(
+                config=make_config(Path(temp_dir) / "workspaces"),
+                prompt_template="Work on {{ issue.identifier }}",
+                tracker=tracker,
+                workspace_manager=FakeWorkspaceManager(Path(temp_dir) / "workspaces"),
+                runner=runner,
+                clock_ms=clock,
+            )
+            await runtime.record_startup_issues()
+
+            # Tick 1: pre-existing issue is skipped.
+            result1 = await runtime.run_tick()
+            self.assertEqual((), result1.dispatched)
+
+            # Tick 2: issue leaves candidates (Done/Canceled).
+            tracker.candidates = []
+            result2 = await runtime.run_tick()
+            self.assertEqual((), result2.dispatched)
+
+            # Tick 3: issue re-enters candidates — must be dispatched now.
+            tracker.candidates = [pre_existing]
+            result3 = await runtime.run_tick()
+            self.assertEqual(("IN-301",), result3.dispatched)
+
+
 if __name__ == "__main__":
     unittest.main()
