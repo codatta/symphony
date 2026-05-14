@@ -198,3 +198,49 @@ uv run symphony init \
   --project-slug <linear-project-slug> \
   --linear-api-key <linear-api-key>
 ```
+
+---
+
+### Known Limitation: Review Feedback Loop Requires Manual State Reset
+
+The current review-and-revise cycle works but requires one manual step per
+round:
+
+1. Engineer reviews the PR and leaves feedback as a **Linear issue comment**.
+2. Engineer manually moves the issue from "In Review" back to "In Progress".
+3. Symphony detects the re-entry on the next poll tick and re-dispatches Claude.
+4. Claude reads `{{ issue.comments }}` and revises the implementation.
+
+What does **not** happen automatically:
+
+- GitHub PR review comments are not read (Symphony only reads Linear comments).
+- When a reviewer clicks "Request Changes" on GitHub, the Linear issue is not
+  moved back to In Progress — the engineer must do it manually.
+
+### Planned Improvement: Auto-Requeue on PR Review
+
+To close the gap, Symphony should react to GitHub PR review events and reset
+the Linear issue state automatically.
+
+**Recommended — GitHub webhook handler:**
+
+Add an optional `--webhook-port` flag to `symphony run` that opens a thin HTTP
+listener for `POST /github/webhook`. On a `pull_request_review` event where
+`review.state == "changes_requested"`:
+
+1. Extract the Linear issue identifier from the PR body (match
+   `linear.app/.*/IN-\d+`).
+2. Call `issueUpdate` to move the issue back to "In Progress".
+3. Symphony's next poll tick detects the re-entry and re-dispatches Claude.
+
+Implementation scope: new optional HTTP handler, `X-Hub-Signature-256`
+validation, and a single `issueUpdate` call. No changes to the orchestrator or
+runner are needed.
+
+**Alternative — GitHub polling inside `reconcile_running`:**
+
+Symphony could check the GitHub API for the PR review status on every
+reconcile cycle. When a running issue has a PR URL stored in its Linear
+comments and that PR has an unresolved "changes_requested" review, Symphony
+moves the issue back to "In Progress" directly. No external webhook endpoint
+is needed, but it adds GitHub API calls to every reconcile pass.

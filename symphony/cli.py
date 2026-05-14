@@ -557,26 +557,36 @@ def init_main(argv: Sequence[str] | None = None) -> int:
 
         # --- Step 1: Linear project slug ---
         if not args.project_slug and not args.yes:
-            print("Find your project slugId at: Linear → Settings → API → Project slug")
-            print("  (also visible in the project URL: linear.app/TEAM/project/NAME-SLUG)")
-        project_slug = args.project_slug or _prompt("Linear project slugId")
+            print("Step 1/5 — Linear project slug")
+            print("  The short identifier for your Linear project.")
+            print("  Find it at: your project → Settings, or in the project URL:")
+            print("    linear.app/YOUR-TEAM/project/NAME-<slug>")
+        project_slug = args.project_slug or _prompt("Linear project slug")
         if not project_slug:
             raise OnboardingError("missing_project_slug")
 
+        if not args.active_states and not args.yes:
+            print("\nStep 2/5 — Linear workflow states")
+            print("  Active states: issues in these states will be picked up and worked on.")
+            print("  Terminal states: issues in these states are considered done and won't be retried.")
+            print("  Check your team's workflow at: linear.app → your team → Settings → Workflow.")
         active_states = parse_state_list(
             args.active_states
-            or (None if args.yes else _prompt_default("Active Linear states", ", ".join(DEFAULT_ACTIVE_STATES))),
+            or (None if args.yes else _prompt_default("Active states (comma-separated)", ", ".join(DEFAULT_ACTIVE_STATES))),
             DEFAULT_ACTIVE_STATES,
         )
         terminal_states = parse_state_list(
             args.terminal_states
-            or (None if args.yes else _prompt_default("Terminal Linear states", ", ".join(DEFAULT_TERMINAL_STATES))),
+            or (None if args.yes else _prompt_default("Terminal states (comma-separated)", ", ".join(DEFAULT_TERMINAL_STATES))),
             DEFAULT_TERMINAL_STATES,
         )
+        if not args.workspace_root and not args.yes:
+            print("  Workspace root: the local directory where per-issue workspaces are created.")
+            print("  Each issue gets its own isolated subdirectory under this path.")
         workspace_root = args.workspace_root or (
             default_workspace_root(project_slug)
             if args.yes
-            else _prompt_default("Workspace root", default_workspace_root(project_slug))
+            else _prompt_default("Workspace root directory", default_workspace_root(project_slug))
         )
 
         # --- Step 2: GitHub org + repo (claude_code runner only) ---
@@ -585,12 +595,14 @@ def init_main(argv: Sequence[str] | None = None) -> int:
         github_repo = args.github_repo or ""
         if runner == "claude_code" and not args.yes:
             if not github_org:
-                print("\nGitHub organisation or user name that owns your repositories")
-                print("  (e.g. 'acme-corp' from github.com/acme-corp/...)")
+                print("\nStep 3/5 — GitHub repository for PR automation")
+                print("  Agents will clone this repo, push a branch, and open a PR.")
+                print("  Enter the GitHub organisation or user name that owns your repo.")
+                print("  Example: for github.com/acme-corp/my-backend, org = 'acme-corp'")
                 github_org = _prompt("GitHub org/user (blank to fill in later)").strip()
             if not github_repo:
-                print("Default repository name for PR automation")
-                print("  (e.g. 'my-backend' from github.com/acme-corp/my-backend)")
+                print("  Repository name (without the org prefix).")
+                print("  Example: for github.com/acme-corp/my-backend, repo = 'my-backend'")
                 github_repo = _prompt("Repository name (blank to fill in later)").strip()
 
         workflow = generate_workflow(
@@ -613,8 +625,10 @@ def init_main(argv: Sequence[str] | None = None) -> int:
     # --- Step 3: Linear API key ---
     linear_token = args.linear_api_key
     if linear_token is None and not args.yes:
-        print("\nLinear API key (starts with lin_api_...)")
-        print("  Create at: linear.app/settings/api → Personal API keys")
+        print("\nStep 4/5 — Linear API key")
+        print("  Symphony uses this key to poll issues and post progress comments.")
+        print("  Create one at: linear.app/settings/api → Personal API keys")
+        print("  The key starts with lin_api_...")
         linear_token = getpass.getpass("Linear API key (blank to skip): ").strip()
     if linear_token:
         credentials_path = save_local_linear_token(linear_token, path=args.credentials_path)
@@ -626,9 +640,11 @@ def init_main(argv: Sequence[str] | None = None) -> int:
     # --- Step 4: GitHub token (optional, for PR automation) ---
     github_token = args.github_token
     if github_token is None and runner == "claude_code" and not args.yes:
-        print("\nGitHub personal access token for PR automation (optional)")
+        print("\nStep 5/5 — GitHub personal access token (for PR automation)")
+        print("  Agents need this to push branches and open pull requests.")
+        print("  Create a fine-grained token at: github.com/settings/tokens")
         print("  Required permissions: Contents (Read/Write), Pull requests (Read/Write)")
-        print("  Create at: github.com/settings/tokens → Fine-grained tokens")
+        print("  Scope it to the specific repository if possible.")
         github_token = getpass.getpass("GitHub token (blank to skip): ").strip()
     if github_token:
         gh_user = _validate_github_token(github_token)
