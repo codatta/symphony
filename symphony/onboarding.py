@@ -63,6 +63,7 @@ class InitConfig:
     codex_command: str = "codex app-server"
     runner: str = DEFAULT_RUNNER
     github_org: str = ""
+    github_repo: str = ""
 
 
 class OnboardingError(ValueError):
@@ -99,7 +100,11 @@ def generate_workflow(config: InitConfig) -> str:
     }
 
     if runner == "claude_code":
-        prompt = _CLAUDE_PR_PROMPT.replace("__GITHUB_ORG__", config.github_org or "YOUR_ORG")
+        prompt = (
+            _CLAUDE_PR_PROMPT
+            .replace("__GITHUB_ORG__", config.github_org or "YOUR_ORG")
+            .replace("__GITHUB_REPO__", config.github_repo or "YOUR_REPO")
+        )
     else:
         front_matter["codex"] = {
             "command": codex_command,
@@ -144,8 +149,8 @@ Review feedback — address each point before submitting:
 
 ## Instructions
 
-1. The issue description specifies which repository to work on. Clone it:
-   git clone https://x-access-token:$GITHUB_TOKEN@github.com/__GITHUB_ORG__/REPO_NAME .
+1. Clone the repository (gh handles authentication — no token in the URL):
+   gh repo clone __GITHUB_ORG__/__GITHUB_REPO__ .
 
 2. Create a working branch:
    git checkout -b fix/{{ issue.identifier | lower }}

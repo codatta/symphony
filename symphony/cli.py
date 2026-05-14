@@ -6,6 +6,7 @@ import getpass
 import logging
 import shlex
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -170,6 +171,10 @@ def build_init_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--github-org",
         help="GitHub organisation or user name that owns the target repositories.",
+    )
+    parser.add_argument(
+        "--github-repo",
+        help="Default GitHub repository name (without org prefix) for PR automation.",
     )
     parser.add_argument(
         "--yes",
@@ -574,13 +579,19 @@ def init_main(argv: Sequence[str] | None = None) -> int:
             else _prompt_default("Workspace root", default_workspace_root(project_slug))
         )
 
-        # --- Step 2: GitHub org (claude_code runner only) ---
+        # --- Step 2: GitHub org + repo (claude_code runner only) ---
         runner = args.runner
         github_org = args.github_org or ""
-        if runner == "claude_code" and not github_org and not args.yes:
-            print("\nGitHub organisation or user name that owns your repositories")
-            print("  (e.g. 'acme-corp' from github.com/acme-corp/...)")
-            github_org = _prompt("GitHub org/user (blank to fill in later)").strip()
+        github_repo = args.github_repo or ""
+        if runner == "claude_code" and not args.yes:
+            if not github_org:
+                print("\nGitHub organisation or user name that owns your repositories")
+                print("  (e.g. 'acme-corp' from github.com/acme-corp/...)")
+                github_org = _prompt("GitHub org/user (blank to fill in later)").strip()
+            if not github_repo:
+                print("Default repository name for PR automation")
+                print("  (e.g. 'my-backend' from github.com/acme-corp/my-backend)")
+                github_repo = _prompt("Repository name (blank to fill in later)").strip()
 
         workflow = generate_workflow(
             InitConfig(
@@ -592,6 +603,7 @@ def init_main(argv: Sequence[str] | None = None) -> int:
                 codex_command=args.codex_command,
                 runner=runner,
                 github_org=github_org,
+                github_repo=github_repo,
             )
         )
         workflow_path = write_workflow(args.workflow_path, workflow, overwrite=args.overwrite)
@@ -619,13 +631,14 @@ def init_main(argv: Sequence[str] | None = None) -> int:
         print("  Create at: github.com/settings/tokens → Fine-grained tokens")
         github_token = getpass.getpass("GitHub token (blank to skip): ").strip()
     if github_token:
-        credentials_path = save_local_github_token(github_token, path=args.credentials_path)
-        print(f"Stored GitHub credentials: {credentials_path}")
-        result = _validate_github_token(github_token)
-        if result:
-            print(f"  Connected as: {result}")
+        gh_user = _validate_github_token(github_token)
+        if gh_user:
+            credentials_path = save_local_github_token(github_token, path=args.credentials_path)
+            print(f"Stored GitHub credentials: {credentials_path}")
+            print(f"  Connected as: {gh_user}")
         else:
-            print("  Warning: could not verify token — check permissions and try again.")
+            print("  GitHub token validation failed — token not stored.")
+            print("  Check permissions or re-run with --github-token.")
     elif runner == "claude_code":
         print("GitHub token not stored. Set GITHUB_TOKEN or re-run with --github-token.")
 
@@ -666,6 +679,13 @@ def doctor_checks(
     if context.config.agent.runner == "claude_code":
         command_ok, command_check = _check_command(context.config.claude_code.command)
         checks.append((command_ok, "claude command", command_check))
+        gh_ok, gh_check = _check_gh_auth()
+        checks.append((gh_ok, "gh auth", gh_check))
+        github_token = _resolve_github_token()
+        if github_token:
+            checks.append((True, "github token", "resolved"))
+        else:
+            checks.append((False, "github token", "not found — run symphony init --github-token or set GITHUB_TOKEN"))
     else:
         command_ok, command_check = _check_command(context.config.codex.command)
         checks.append((command_ok, "codex command", command_check))
@@ -694,6 +714,21 @@ def _port_value(raw: str) -> int:
     if port <= 0 or port > 65_535:
         raise argparse.ArgumentTypeError("port_must_be_1_to_65535")
     return port
+
+
+def _check_gh_auth() -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return (True, "authenticated") if result.returncode == 0 else (False, "not authenticated — run: gh auth login")
+    except FileNotFoundError:
+        return False, "gh CLI not found — install from cli.github.com"
+    except Exception as exc:
+        return False, str(exc)
 
 
 def _resolve_linear_token(config: WorkflowConfig) -> str | None:
