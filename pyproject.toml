@@ -2,12 +2,19 @@
 name = "symphony"
 version = "0.1.0"
 description = "Python implementation of the Symphony agent orchestration service"
+readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
 dependencies = [
   "jinja2>=3.1",
   "pyyaml>=6.0",
   "watchfiles>=0.21",
 ]
+
+[project.urls]
+Homepage = "https://github.com/codatta/symphony"
+Repository = "https://github.com/codatta/symphony"
+Issues = "https://github.com/codatta/symphony/issues"
 
 [project.scripts]
 symphony = "symphony.cli:main"
