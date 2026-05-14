@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
+from symphony.agents.claude_code import ClaudeCodeRunner
 from symphony.agents.codex import CodexRunner
 from symphony.auth import MissingLinearTokenError, TokenStore, default_credentials_path, save_local_linear_token
 from symphony.config import ConfigError, WorkflowConfig
@@ -219,8 +220,12 @@ def validate_dispatch_config(config: WorkflowConfig, *, environ: Mapping[str, st
     if not config.tracker.project_slug:
         raise ConfigError("missing_tracker_project_slug")
     TokenStore(config.tracker, environ=environ).resolve_linear_token()
-    if not config.codex.command.strip():
-        raise ConfigError("codex_command_required")
+    if config.agent.runner == "claude_code":
+        if not config.claude_code.command.strip():
+            raise ConfigError("claude_code_command_required")
+    else:
+        if not config.codex.command.strip():
+            raise ConfigError("codex_command_required")
 
 
 def configure_logging(level: str) -> None:
@@ -255,7 +260,16 @@ def create_workspace_manager(config: WorkflowConfig) -> WorkspaceManager:
     return WorkspaceManager(config.workspace, config.hooks)
 
 
-def create_runner(config: WorkflowConfig, linear_client: LinearClient) -> CodexRunner:
+def create_runner(config: WorkflowConfig, linear_client: LinearClient) -> CodexRunner | ClaudeCodeRunner:
+    if config.agent.runner == "claude_code":
+        linear_api_key = _resolve_linear_token(config)
+        return ClaudeCodeRunner(
+            config.claude_code.command,
+            model=config.claude_code.model,
+            permission_mode=config.claude_code.permission_mode,
+            turn_timeout_ms=config.claude_code.turn_timeout_ms,
+            linear_api_key=linear_api_key,
+        )
     return CodexRunner(
         config.codex.command,
         approval_policy=config.codex.approval_policy or "on-request",
@@ -272,6 +286,7 @@ async def run_once(runtime: SymphonyRuntime) -> RuntimeTickResult:
 
 
 async def run_poll_loop(runtime: SymphonyRuntime, *, before_tick: TickHook | None = None) -> None:
+    await runtime.record_startup_issues()
     while True:
         if before_tick is not None:
             result = before_tick()
@@ -586,8 +601,12 @@ def doctor_checks(
     checks.append((True, "workflow", str(context.workflow_path)))
     checks.append((True, "linear auth", "token resolved"))
 
-    command_ok, command_check = _check_command(context.config.codex.command)
-    checks.append((command_ok, "codex command", command_check))
+    if context.config.agent.runner == "claude_code":
+        command_ok, command_check = _check_command(context.config.claude_code.command)
+        checks.append((command_ok, "claude command", command_check))
+    else:
+        command_ok, command_check = _check_command(context.config.codex.command)
+        checks.append((command_ok, "codex command", command_check))
 
     workspace_ok, workspace_check = _check_workspace_root(context.config.workspace.root)
     checks.append((workspace_ok, "workspace root", workspace_check))
@@ -613,6 +632,13 @@ def _port_value(raw: str) -> int:
     if port <= 0 or port > 65_535:
         raise argparse.ArgumentTypeError("port_must_be_1_to_65535")
     return port
+
+
+def _resolve_linear_token(config: WorkflowConfig) -> str | None:
+    try:
+        return TokenStore(config.tracker).resolve_linear_token()
+    except Exception:
+        return None
 
 
 def _codex_turn_sandbox_policy(config: WorkflowConfig) -> dict[str, object] | None:

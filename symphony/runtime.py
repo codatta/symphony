@@ -69,6 +69,14 @@ class SymphonyRuntime:
         self.clock_ms = clock_ms or _monotonic_epoch_ms
         self.on_event = on_event
         self.on_state_change = on_state_change
+        # Tracks the issue IDs seen in the previous poll tick.  An issue is
+        # eligible for dispatch only when it newly appears (present in current
+        # candidates but absent from _prev_candidate_ids).  Starts empty so
+        # that a bare run_tick() call (e.g. in tests or --once mode) treats every
+        # issue as new.  The poll loop calls record_startup_issues() before the
+        # first tick to seed this with the currently-active set, which makes
+        # pre-existing issues invisible until they leave and re-enter active states.
+        self._prev_candidate_ids: set[str] = set()
 
     async def run_tick(self) -> RuntimeTickResult:
         """Poll Linear once, dispatch eligible issues, and wait for started workers."""
@@ -77,10 +85,15 @@ class SymphonyRuntime:
         await self.reconcile_running(now_ms=now_ms)
         candidates = list(await _maybe_await(self.tracker.fetch_candidate_issues()))
 
+        current_ids = {issue.id for issue in candidates}
+        new_issue_ids = current_ids - self._prev_candidate_ids
+        self._prev_candidate_ids = current_ids
+
         released = await self._release_due_retries_missing_from_candidates(candidates)
         dispatched_issues = self._dispatch_due_retries(candidates, now_ms=now_ms)
 
-        remaining = [issue for issue in candidates if issue.id not in {item.id for item in dispatched_issues}]
+        eligible = [issue for issue in candidates if issue.id in new_issue_ids]
+        remaining = [issue for issue in eligible if issue.id not in {item.id for item in dispatched_issues}]
         for issue in select_dispatchable(remaining, self.state):
             dispatch_issue(issue, self.state, now_ms=now_ms)
             dispatched_issues.append(issue)
@@ -127,6 +140,18 @@ class SymphonyRuntime:
             if action.cleanup_workspace:
                 await _maybe_await(self.workspace_manager.cleanup(action.identifier))
         self._notify_state_change()
+
+    async def record_startup_issues(self) -> None:
+        """Seed _prev_candidate_ids with currently-active issues.
+
+        Call this once before the poll loop starts.  Issues that are already
+        active at startup will be skipped on the first tick; they become
+        eligible again only if they leave the active states and re-enter them
+        while the daemon is running.
+        """
+        candidates = list(await _maybe_await(self.tracker.fetch_candidate_issues()))
+        self._prev_candidate_ids = {issue.id for issue in candidates}
+        LOGGER.info("Startup snapshot: %d pre-existing issue(s) will be skipped.", len(self._prev_candidate_ids))
 
     def snapshot(self) -> OrchestratorState:
         return self.state
