@@ -23,5 +23,6 @@ class Issue:
     url: str | None
     labels: tuple[str, ...] = field(default_factory=tuple)
     blocked_by: tuple[Blocker, ...] = field(default_factory=tuple)
+    comments: tuple[str, ...] = field(default_factory=tuple)
     created_at: datetime | None = None
     updated_at: datetime | None = None

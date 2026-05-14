@@ -60,6 +60,22 @@ query SymphonyLinearPoll($projectSlug: String!, $stateNames: [String!]!, $first:
 """.strip()
 
 
+ISSUE_COMMENTS_QUERY = """
+query SymphonyLinearIssueComments($issueId: String!, $first: Int!) {
+  issue(id: $issueId) {
+    comments(first: $first) {
+      nodes {
+        body
+        user {
+          name
+        }
+      }
+    }
+  }
+}
+""".strip()
+
+
 ISSUES_BY_ID_QUERY = """
 query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!) {
   issues(filter: {id: {in: $ids}}, first: $first) {
@@ -204,6 +220,21 @@ class LinearClient:
 
         requested_order = {issue_id: index for index, issue_id in enumerate(ids)}
         return sorted(issues, key=lambda issue: requested_order.get(issue.id, len(requested_order)))
+
+    def fetch_issue_comments(self, issue_id: str) -> list[str]:
+        body = self.graphql(ISSUE_COMMENTS_QUERY, {"issueId": issue_id, "first": 50})
+        nodes = _nested(body, "data", "issue", "comments", "nodes")
+        if not isinstance(nodes, list):
+            return []
+        comments: list[str] = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            text = node.get("body")
+            author = _nested(node, "user", "name") or "Unknown"
+            if isinstance(text, str) and text.strip():
+                comments.append(f"{author}: {text.strip()}")
+        return comments
 
     def graphql_raw(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
         variables = variables or {}

@@ -87,7 +87,46 @@ def save_local_linear_token(
     resolved = _non_empty(token)
     if resolved is None:
         raise MissingLinearTokenError("missing_tracker_api_key")
+    return _save_credentials({"linear": {"api_key": resolved}}, path=path, environ=environ)
 
+
+def load_local_github_token(
+    *,
+    path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    credentials_path = Path(path).expanduser() if path is not None else default_credentials_path(environ)
+    try:
+        payload = json.loads(credentials_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    github = payload.get("github")
+    if not isinstance(github, dict):
+        return None
+    token = github.get("token")
+    return _non_empty(token) if isinstance(token, str) else None
+
+
+def save_local_github_token(
+    token: str,
+    *,
+    path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    resolved = _non_empty(token)
+    if resolved is None:
+        raise ValueError("empty_github_token")
+    return _save_credentials({"github": {"token": resolved}}, path=path, environ=environ)
+
+
+def _save_credentials(
+    updates: dict[str, object],
+    *,
+    path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
     credentials_path = Path(path).expanduser() if path is not None else default_credentials_path(environ)
     credentials_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -95,8 +134,16 @@ def save_local_linear_token(
     except OSError:
         pass
 
+    try:
+        existing: dict[str, object] = json.loads(credentials_path.read_text(encoding="utf-8"))
+        if not isinstance(existing, dict):
+            existing = {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        existing = {}
+
+    existing.update(updates)
     credentials_path.write_text(
-        json.dumps({"linear": {"api_key": resolved}}, indent=2, sort_keys=True) + "\n",
+        json.dumps(existing, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     try:
