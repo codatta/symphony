@@ -22,6 +22,7 @@ from symphony.orchestrator import (
     release_issue,
     select_dispatchable,
     should_dispatch,
+    stalled_issue_ids,
 )
 from symphony.tracker.models import Issue
 from symphony.workflow import WorkflowDefinition, render_prompt
@@ -84,7 +85,7 @@ class SymphonyRuntime:
 
         now_ms = self.clock_ms()
         await self.reconcile_running(now_ms=now_ms)
-        candidates = list(await _maybe_await(self.tracker.fetch_candidate_issues()))
+        candidates = list(await _call_sync(self.tracker.fetch_candidate_issues))
 
         current_ids = {issue.id for issue in candidates}
         new_issue_ids = current_ids - self._prev_candidate_ids
@@ -134,8 +135,26 @@ class SymphonyRuntime:
         if not self.state.running:
             return
 
+        now_ms = now_ms or self.clock_ms()
+        stall_timeout_ms = self.config.codex.stall_timeout_ms
+        for issue_id in list(stalled_issue_ids(self.state, now_ms=now_ms, stall_timeout_ms=stall_timeout_ms)):
+            entry = self.state.running.get(issue_id)
+            identifier = entry.identifier if entry else issue_id
+            LOGGER.warning("Issue %s has stalled (no events for %ds), forcing retry.", identifier, stall_timeout_ms // 1000)
+            complete_worker_failure(
+                issue_id,
+                self.state,
+                now_ms=now_ms,
+                max_retry_backoff_ms=self.config.agent.max_retry_backoff_ms,
+                error="stall_timeout",
+            )
+
         issue_ids = list(self.state.running)
-        refreshed = list(await _maybe_await(self.tracker.fetch_issue_states_by_ids(issue_ids)))
+        if not issue_ids:
+            self._notify_state_change()
+            return
+
+        refreshed = list(await _call_sync(self.tracker.fetch_issue_states_by_ids, issue_ids))
         actions = reconcile_refreshed_issues(refreshed, self.state)
         for action in actions:
             if action.cleanup_workspace:
@@ -150,7 +169,7 @@ class SymphonyRuntime:
         eligible again only if they leave the active states and re-enter them
         while the daemon is running.
         """
-        candidates = list(await _maybe_await(self.tracker.fetch_candidate_issues()))
+        candidates = list(await _call_sync(self.tracker.fetch_candidate_issues))
         self._prev_candidate_ids = {issue.id for issue in candidates}
         LOGGER.info("Startup snapshot: %d pre-existing issue(s) will be skipped.", len(self._prev_candidate_ids))
 
@@ -350,3 +369,10 @@ def _apply_usage(entry: Any, usage: TokenUsage | None) -> None:
 
 def _monotonic_epoch_ms() -> int:
     return int(time.time() * 1000)
+
+
+async def _call_sync(fn: Any, *args: Any) -> Any:
+    """Run a sync callable in a thread pool so it doesn't block the event loop."""
+    if asyncio.iscoroutinefunction(fn):
+        return await fn(*args)
+    return await asyncio.to_thread(fn, *args)
