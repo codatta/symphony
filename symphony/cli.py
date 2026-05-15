@@ -5,9 +5,9 @@ import asyncio
 import getpass
 import logging
 import logging.handlers
+import os
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -21,6 +21,7 @@ from symphony.auth import (
     MissingLinearTokenError,
     TokenStore,
     default_credentials_path,
+    load_local_linear_token,
     load_local_github_token,
     save_local_github_token,
     save_local_linear_token,
@@ -182,7 +183,12 @@ def build_init_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--yes",
         action="store_true",
-        help="Run non-interactively using defaults. Requires --project-slug.",
+        help="Alias for --mode automated. Requires explicit setup inputs.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("interactive", "automated"),
+        help="Setup mode. Defaults to interactive in a TTY and automated otherwise.",
     )
     return parser
 
@@ -332,17 +338,9 @@ async def run_once(runtime: SymphonyRuntime) -> RuntimeTickResult:
     return await runtime.run_tick()
 
 
-async def run_poll_loop(
-    runtime: SymphonyRuntime,
-    *,
-    before_tick: TickHook | None = None,
-    shutdown_event: asyncio.Event | None = None,
-) -> None:
+async def run_poll_loop(runtime: SymphonyRuntime, *, before_tick: TickHook | None = None) -> None:
     await runtime.record_startup_issues()
     while True:
-        if shutdown_event is not None and shutdown_event.is_set():
-            LOGGER.info("Shutdown requested, exiting poll loop.")
-            return
         try:
             if before_tick is not None:
                 result = before_tick()
@@ -433,36 +431,23 @@ async def run_daemon(
     workflow_reloader: "RuntimeWorkflowReloader | None" = None,
     status_server: StatusServer = serve_status_api,
 ) -> None:
-    loop = asyncio.get_running_loop()
-    shutdown_event = asyncio.Event()
-
-    def _on_signal() -> None:
-        LOGGER.info("Shutdown signal received, stopping after current tick completes.")
-        shutdown_event.set()
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, _on_signal)
-
     status_api = create_status_api(runtime)
     status_task = asyncio.create_task(status_server(status_api, context.port))
     poll_task = asyncio.create_task(
         run_poll_loop(
             runtime,
             before_tick=workflow_reloader.reload_if_changed if workflow_reloader is not None else None,
-            shutdown_event=shutdown_event,
         )
     )
     tasks = {status_task, poll_task}
 
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         for task in done:
             task.result()
         for task in pending:
             task.cancel()
     finally:
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.remove_signal_handler(sig)
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -602,43 +587,43 @@ def init_main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if args.yes and not args.project_slug:
-            raise OnboardingError("missing_project_slug")
+        mode = _resolve_init_mode(args)
+        automated = mode == "automated"
 
-        if not args.yes:
+        if not automated:
             run_init_tutorial_once()
 
         # --- Step 1: Linear project slug ---
-        if not args.project_slug and not args.yes:
+        if not args.project_slug and not automated:
             print("Step 1/5 — Linear project slug")
             print("  The short identifier for your Linear project.")
             print("  Find it at: your project → Settings, or in the project URL:")
             print("    linear.app/YOUR-TEAM/project/NAME-<slug>")
-        project_slug = args.project_slug or _prompt("Linear project slug")
-        if not project_slug:
-            raise OnboardingError("missing_project_slug")
+        project_slug = args.project_slug or ("" if automated else _prompt("Linear project slug"))
+        if not project_slug and not automated:
+            raise OnboardingError("missing_project_slug — pass --project-slug your-linear-project-slug")
 
-        if not args.active_states and not args.yes:
+        if not args.active_states and not automated:
             print("\nStep 2/5 — Linear workflow states")
             print("  Active states: issues in these states will be picked up and worked on.")
             print("  Terminal states: issues in these states are considered done and won't be retried.")
             print("  Check your team's workflow at: linear.app → your team → Settings → Workflow.")
         active_states = parse_state_list(
             args.active_states
-            or (None if args.yes else _prompt_default("Active states (comma-separated)", ", ".join(DEFAULT_ACTIVE_STATES))),
+            or (None if automated else _prompt_default("Active states (comma-separated)", ", ".join(DEFAULT_ACTIVE_STATES))),
             DEFAULT_ACTIVE_STATES,
         )
         terminal_states = parse_state_list(
             args.terminal_states
-            or (None if args.yes else _prompt_default("Terminal states (comma-separated)", ", ".join(DEFAULT_TERMINAL_STATES))),
+            or (None if automated else _prompt_default("Terminal states (comma-separated)", ", ".join(DEFAULT_TERMINAL_STATES))),
             DEFAULT_TERMINAL_STATES,
         )
-        if not args.workspace_root and not args.yes:
+        if not args.workspace_root and not automated:
             print("  Workspace root: the local directory where per-issue workspaces are created.")
             print("  Each issue gets its own isolated subdirectory under this path.")
         workspace_root = args.workspace_root or (
             default_workspace_root(project_slug)
-            if args.yes
+            if automated
             else _prompt_default("Workspace root directory", default_workspace_root(project_slug))
         )
 
@@ -646,7 +631,7 @@ def init_main(argv: Sequence[str] | None = None) -> int:
         runner = args.runner
         github_org = args.github_org or ""
         github_repo = args.github_repo or ""
-        if runner == "claude_code" and not args.yes:
+        if runner == "claude_code" and not automated:
             if not github_org:
                 print("\nStep 3/5 — GitHub repository for PR automation")
                 print("  Agents will clone this repo, push a branch, and open a PR.")
@@ -657,6 +642,38 @@ def init_main(argv: Sequence[str] | None = None) -> int:
                 print("  Repository name (without the org prefix).")
                 print("  Example: for github.com/acme-corp/my-backend, repo = 'my-backend'")
                 github_repo = _prompt("Repository name (blank to fill in later)").strip()
+
+        # --- Step 3: Linear API key ---
+        linear_token = args.linear_api_key
+        if linear_token is None and not automated:
+            print("\nStep 4/5 — Linear API key")
+            print("  Symphony uses this key to poll issues and post progress comments.")
+            print("  Create one at: linear.app/settings/api → Personal API keys")
+            print("  The key starts with lin_api_...")
+            linear_token = getpass.getpass("Linear API key (blank to skip): ").strip()
+
+        # --- Step 4: GitHub token (optional, for PR automation) ---
+        github_token = args.github_token
+        if github_token is None and runner == "claude_code" and not automated:
+            print("\nStep 5/5 — GitHub personal access token (for PR automation)")
+            print("  Agents need this to push branches and open pull requests.")
+            print("  Create a fine-grained token at: github.com/settings/tokens")
+            print("  Required permissions: Contents (Read/Write), Pull requests (Read/Write)")
+            print("  Scope it to the specific repository if possible.")
+            github_token = getpass.getpass("GitHub token (blank to skip): ").strip()
+
+        if automated:
+            failures = _automated_setup_failures(
+                args,
+                project_slug=project_slug,
+                runner=runner,
+                github_org=github_org,
+                github_repo=github_repo,
+                linear_token=linear_token,
+                github_token=github_token,
+            )
+            if failures:
+                raise OnboardingError(_format_setup_failures(failures))
 
         workflow = generate_workflow(
             InitConfig(
@@ -675,32 +692,17 @@ def init_main(argv: Sequence[str] | None = None) -> int:
     except OnboardingError as exc:
         parser.exit(2, f"symphony init: {exc}\n")
 
-    # --- Step 3: Linear API key ---
-    linear_token = args.linear_api_key
-    if linear_token is None and not args.yes:
-        print("\nStep 4/5 — Linear API key")
-        print("  Symphony uses this key to poll issues and post progress comments.")
-        print("  Create one at: linear.app/settings/api → Personal API keys")
-        print("  The key starts with lin_api_...")
-        linear_token = getpass.getpass("Linear API key (blank to skip): ").strip()
     if linear_token:
         credentials_path = save_local_linear_token(linear_token, path=args.credentials_path)
         print(f"Stored Linear credentials: {credentials_path}")
+    elif automated:
+        print("Linear credentials not stored. Using existing LINEAR_API_KEY or local credentials.")
     else:
         print("Linear credentials not stored. Set LINEAR_API_KEY or re-run with --linear-api-key.")
         print(f"Default credentials path: {default_credentials_path()}")
 
-    # --- Step 4: GitHub token (optional, for PR automation) ---
-    github_token = args.github_token
-    if github_token is None and runner == "claude_code" and not args.yes:
-        print("\nStep 5/5 — GitHub personal access token (for PR automation)")
-        print("  Agents need this to push branches and open pull requests.")
-        print("  Create a fine-grained token at: github.com/settings/tokens")
-        print("  Required permissions: Contents (Read/Write), Pull requests (Read/Write)")
-        print("  Scope it to the specific repository if possible.")
-        github_token = getpass.getpass("GitHub token (blank to skip): ").strip()
     if github_token:
-        gh_user = _validate_github_token(github_token)
+        gh_user = "provided" if automated else _validate_github_token(github_token)
         if gh_user:
             credentials_path = save_local_github_token(github_token, path=args.credentials_path)
             print(f"Stored GitHub credentials: {credentials_path}")
@@ -708,12 +710,90 @@ def init_main(argv: Sequence[str] | None = None) -> int:
         else:
             print("  GitHub token validation failed — token not stored.")
             print("  Check permissions or re-run with --github-token.")
+    elif runner == "claude_code" and automated:
+        print("GitHub token not stored. Using gh auth, GITHUB_TOKEN, or local credentials.")
     elif runner == "claude_code":
         print("GitHub token not stored. Set GITHUB_TOKEN or re-run with --github-token.")
 
     print(f"\nWrote workflow: {workflow_path}")
     print(f"Next: symphony doctor {workflow_path}")
     return 0
+
+
+def _resolve_init_mode(args: argparse.Namespace) -> str:
+    if args.yes and args.mode == "interactive":
+        raise OnboardingError("mode_conflict — --yes cannot be combined with --mode interactive")
+    if args.yes:
+        return "automated"
+    if args.mode is not None:
+        return args.mode
+    return "interactive" if sys.stdin.isatty() else "automated"
+
+
+def _automated_setup_failures(
+    args: argparse.Namespace,
+    *,
+    project_slug: str,
+    runner: str,
+    github_org: str,
+    github_repo: str,
+    linear_token: str | None,
+    github_token: str | None,
+) -> list[str]:
+    failures: list[str] = []
+    if not project_slug.strip():
+        failures.append("project slug: pass --project-slug your-linear-project-slug")
+
+    if not _has_linear_setup_auth(linear_token, credentials_path=args.credentials_path):
+        failures.append(
+            "linear auth: pass --linear-api-key, set LINEAR_API_KEY, "
+            "or run interactive setup"
+        )
+
+    if runner == "claude_code":
+        if not github_org.strip() or not github_repo.strip():
+            failures.append("github repo: pass both --github-org and --github-repo")
+        command_ok, command_detail = _check_command("claude")
+        if not command_ok:
+            failures.append(f"claude command: {command_detail}; install Claude Code and run: claude login")
+        if not _has_github_setup_auth(github_token, credentials_path=args.credentials_path):
+            failures.append(
+                "github auth: run: gh auth login, pass --github-token, "
+                "set GITHUB_TOKEN, or run interactive setup"
+            )
+    else:
+        command_ok, command_detail = _check_command(args.codex_command)
+        if not command_ok:
+            failures.append(
+                f"codex command: {command_detail}; install Codex or pass --codex-command"
+            )
+
+    return failures
+
+
+def _format_setup_failures(failures: Sequence[str]) -> str:
+    lines = ["automated setup failed"]
+    lines.extend(f"- {failure}" for failure in failures)
+    return "\n".join(lines)
+
+
+def _has_linear_setup_auth(token: str | None, *, credentials_path: str | Path | None) -> bool:
+    if token and token.strip():
+        return True
+    if os.environ.get("LINEAR_API_KEY", "").strip():
+        return True
+    return load_local_linear_token(path=credentials_path) is not None
+
+
+def _has_github_setup_auth(token: str | None, *, credentials_path: str | Path | None) -> bool:
+    if token and token.strip():
+        return True
+    if os.environ.get("GITHUB_TOKEN", "").strip():
+        return True
+    if load_local_github_token(path=credentials_path) is not None:
+        return True
+    ok, _detail = _check_gh_auth()
+    return ok
 
 
 def doctor_main(argv: Sequence[str] | None = None) -> int:
