@@ -137,7 +137,7 @@ class SymphonyRuntime:
 
         now_ms = now_ms or self.clock_ms()
         stall_timeout_ms = self.config.codex.stall_timeout_ms
-        for issue_id in stalled_issue_ids(self.state, now_ms=now_ms, stall_timeout_ms=stall_timeout_ms):
+        for issue_id in list(stalled_issue_ids(self.state, now_ms=now_ms, stall_timeout_ms=stall_timeout_ms)):
             entry = self.state.running.get(issue_id)
             identifier = entry.identifier if entry else issue_id
             LOGGER.warning("Issue %s has stalled (no events for %ds), forcing retry.", identifier, stall_timeout_ms // 1000)

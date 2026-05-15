@@ -266,7 +266,7 @@ def configure_logging(level: str, logs_root: Path | None = None) -> None:
         stream_handler.setFormatter(fmt)
         root.addHandler(stream_handler)
 
-    if logs_root is not None:
+    if logs_root is not None and not any(isinstance(h, logging.handlers.RotatingFileHandler) for h in root.handlers):
         logs_root.mkdir(parents=True, exist_ok=True)
         file_handler = logging.handlers.RotatingFileHandler(
             logs_root / "symphony.log",
@@ -333,11 +333,11 @@ async def run_once(runtime: SymphonyRuntime) -> RuntimeTickResult:
 async def run_poll_loop(runtime: SymphonyRuntime, *, before_tick: TickHook | None = None) -> None:
     await runtime.record_startup_issues()
     while True:
-        if before_tick is not None:
-            result = before_tick()
-            if asyncio.iscoroutine(result) or isinstance(result, asyncio.Future):
-                await result
         try:
+            if before_tick is not None:
+                result = before_tick()
+                if asyncio.iscoroutine(result) or isinstance(result, asyncio.Future):
+                    await result
             result = await runtime.run_tick()
         except LinearClientError as exc:
             LOGGER.warning("Linear API error during poll tick, will retry next interval: %s", exc)
@@ -537,6 +537,8 @@ def run_main(argv: Sequence[str] | None = None) -> int:
 
 
 def run_with_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    configure_logging(args.log_level)
+
     try:
         context = load_startup_context(
             args.workflow_path,
