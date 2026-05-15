@@ -28,13 +28,23 @@ polls Linear for active issues, prepares an isolated per-issue workspace, runs a
 Claude Code turn, opens a pull request, and maintains retry / reconciliation
 state.
 
+Use Symphony when you want a teammate or agent to work from a Linear ticket
+instead of from an ad hoc chat prompt. A typical loop is:
+
+1. Create or move a Linear issue into an active state.
+2. Run `symphony run WORKFLOW.md`.
+3. Symphony dispatches Claude Code in an isolated workspace.
+4. Claude opens a PR and comments the PR URL back on the Linear issue.
+5. You review the PR and either merge it or leave feedback on the Linear issue
+   for another iteration.
+
 The desktop app, OAuth setup flow, Linear webhooks, richer dashboard, and
 additional agent backends are planned follow-on phases.
 
 ### Requirements
 
 - Python 3.12+
-- [`uv`](https://docs.astral.sh/uv/) for dependency and command execution
+- [`uv`](https://docs.astral.sh/uv/) for the recommended install path
 - A Linear API key with access to the target project (see [Configure Linear Auth](#configure-linear-auth))
 - **Claude CLI** installed and authenticated locally
   - Install: `npm install -g @anthropic-ai/claude-code` (requires Node 18+)
@@ -46,22 +56,30 @@ additional agent backends are planned follow-on phases.
 
 ### Install The CLI
 
-For normal operator use, install Symphony as a standalone Python CLI with `uv`
-or `pipx`.
+For normal operator use, install Symphony as a standalone Python CLI. The package
+is not published to PyPI yet, so install from GitHub or from a local checkout.
 
-From a local checkout:
-
-```bash
-uv tool install .
-```
-
-From GitHub:
+Install the current `main` branch from GitHub:
 
 ```bash
 uv tool install git+https://github.com/codatta/symphony.git
 ```
 
-With `pipx`:
+Install a specific branch while testing a PR:
+
+```bash
+uv tool install git+https://github.com/codatta/symphony.git@branch-name
+```
+
+Install from a local checkout:
+
+```bash
+git clone https://github.com/codatta/symphony.git
+cd symphony
+uv tool install .
+```
+
+`pipx` also works if your team already uses it:
 
 ```bash
 pipx install git+https://github.com/codatta/symphony.git
@@ -76,10 +94,10 @@ symphony doctor --help
 symphony run --help
 ```
 
-Reinstall an existing `uv tool` install from the current checkout:
+Upgrade or reinstall an existing `uv tool` install:
 
 ```bash
-uv tool install --force .
+uv tool install --force git+https://github.com/codatta/symphony.git
 ```
 
 Remove the installed CLI:
@@ -90,10 +108,17 @@ uv tool uninstall symphony
 
 ### Local Development
 
+Use this path when you are changing Symphony itself rather than operating it:
+
 ```bash
+git clone https://github.com/codatta/symphony.git
+cd symphony
 uv sync
 uv run symphony --help
 ```
+
+In the rest of this README, `symphony ...` means the installed CLI. From a
+development checkout, replace it with `uv run symphony ...`.
 
 Build release artifacts before tagging or attaching a release:
 
@@ -118,12 +143,13 @@ Native single-file binaries and Homebrew formulae are not part of this packaging
 slice. They remain follow-on distribution channels once the CLI command surface
 has stabilized.
 
-### Generate A Workflow
+### First Run Setup
 
-Use the onboarding command for the normal first run:
+Run onboarding from the repository where you want to keep the generated
+`WORKFLOW.md`:
 
 ```bash
-uv run symphony init --project-slug your-linear-project-slug
+symphony init --project-slug your-linear-project-slug
 ```
 
 The wizard will guide you through:
@@ -147,7 +173,7 @@ The wizard will guide you through:
 This writes `WORKFLOW.md` and stores credentials locally. For non-interactive setup:
 
 ```bash
-uv run symphony init \
+symphony init \
   --yes \
   --project-slug your-linear-project-slug \
   --linear-api-key lin_api_... \
@@ -247,7 +273,7 @@ tokens out of committed workflow files.
 ### Validate Configuration
 
 ```bash
-uv run symphony doctor /path/to/WORKFLOW.md
+symphony doctor /path/to/WORKFLOW.md
 ```
 
 Expected result:
@@ -260,12 +286,98 @@ Expected result:
 - workspace root is writable
 - logs root and status API port are printed
 
+### Quick Training: One Iteration
+
+Use this walkthrough to train a teammate on the current CLI loop. Use a small,
+disposable Linear issue and a repository where it is safe for an agent to open a
+PR.
+
+1. **Create a Linear ticket.**
+
+   Example title:
+
+   ```text
+   Add a short CLI smoke-test note to README
+   ```
+
+   Example description:
+
+   ```text
+   Repository: https://github.com/your-org/your-repo
+
+   Please add one short paragraph to README.md explaining how to run the CLI
+   smoke test. Keep the change docs-only. Open a PR when done.
+   ```
+
+2. **Move the ticket into an active state.**
+
+   Use one of the states configured in `WORKFLOW.md`, normally `Todo` or
+   `In Progress`.
+
+3. **Run one controlled poll tick.**
+
+   ```bash
+   symphony run WORKFLOW.md --once --log-level INFO
+   ```
+
+   Expected result:
+
+   ```text
+   Tick OK: fetched=1 dispatched=1 completed=1 failed=0 released=0
+   ```
+
+   The exact counts can vary, but the disposable issue should be fetched and
+   dispatched. Symphony should create an isolated workspace, run Claude Code,
+   and leave logs under the configured logs root.
+
+4. **Inspect the result.**
+
+   Confirm that Claude opened a GitHub PR, commented the PR URL on the Linear
+   issue, and moved the issue to `In Review` if the prompt asks it to do so.
+
+5. **Run the feedback loop.**
+
+   Leave a Linear issue comment with one concrete requested change, then move
+   the issue from `In Review` back to `In Progress`.
+
+   ```bash
+   symphony run WORKFLOW.md --once --log-level INFO
+   ```
+
+   Expected result: Symphony sees the issue re-enter an active state, includes
+   the Linear comments in the prompt, and dispatches Claude to revise the PR.
+
+6. **Finish the loop.**
+
+   Review and merge the PR when acceptable, then move the Linear issue to a
+   terminal state such as `Done`.
+
+Current limitation: GitHub PR review comments are not read automatically. Put
+revision instructions on the Linear issue and manually move the issue back to an
+active state for the next iteration.
+
+### Common Use Cases
+
+- **Small implementation tickets** — scoped code changes with clear acceptance
+  criteria and an expected PR.
+- **Documentation and cleanup tasks** — safe first tickets for training a new
+  operator or validating credentials.
+- **Review follow-up** — leave feedback as a Linear comment, move the issue back
+  to `In Progress`, and let Symphony dispatch another agent pass.
+- **Live-dispatch smoke tests** — use `--once` with a disposable issue to prove
+  Linear auth, workspace creation, runner startup, PR automation, and comments.
+
+Avoid using the current CLI loop for high-risk production changes, secret
+rotation, broad refactors, or tasks where the repository cannot tolerate an
+agent-created PR. Keep early tickets small enough that a human can review the
+entire diff quickly.
+
 ### Run One Poll Tick
 
 Use `--once` for smoke tests and controlled live-dispatch proof:
 
 ```bash
-uv run symphony run /path/to/WORKFLOW.md --once --log-level INFO
+symphony run /path/to/WORKFLOW.md --once --log-level INFO
 ```
 
 This fetches candidate Linear issues, dispatches eligible active issues, waits
@@ -280,7 +392,7 @@ Tick OK: fetched=1 dispatched=1 completed=1 failed=0 released=0
 For continuous local operation:
 
 ```bash
-uv run symphony run /path/to/WORKFLOW.md --port 7337 --logs-root ./log --log-level INFO
+symphony run /path/to/WORKFLOW.md --port 7337 --logs-root ./log --log-level INFO
 ```
 
 Stop the process with `Ctrl-C`.
@@ -289,7 +401,7 @@ Stop the process with `Ctrl-C`.
 
 ```bash
 uv run python -m unittest discover -s tests -p 'test_*.py'
-uv run symphony --help
+symphony --help
 git diff --check
 ```
 
@@ -383,8 +495,8 @@ payloads, respects active/terminal states, and dispatches eligible work with
 bounded concurrency.
 
 **Repository-owned workflow contract.** Runtime policy lives in `WORKFLOW.md`:
-tracker settings, polling interval, workspace root, lifecycle hooks, Codex
-command, sandbox policy, and the prompt template rendered for each issue.
+tracker settings, polling interval, workspace root, lifecycle hooks, agent
+runner settings, and the prompt template rendered for each issue.
 
 **Per-issue workspace lifecycle.** Each issue gets a deterministic isolated
 workspace under `workspace.root`. Workspace keys are sanitized, root containment
@@ -464,9 +576,9 @@ inline action buttons.
 
 ### WORKFLOW.md as the team contract
 
-Runtime behavior -- prompt template, poll interval, concurrency limits, Codex
-config, and workspace hooks -- lives in a `WORKFLOW.md` file versioned with the
-codebase.
+Runtime behavior -- prompt template, poll interval, concurrency limits, agent
+runner config, and workspace hooks -- lives in a `WORKFLOW.md` file versioned
+with the codebase.
 
 ---
 
@@ -508,7 +620,7 @@ codebase.
 
 ## Status
 
-This implementation has a working CLI-first MVP for Linear + Codex and is
+This implementation has a working CLI-first MVP for Linear + Claude Code and is
 moving into Phase 2 productionization. See [`prd.md`](prd.md) for the full
 product requirements and build queue, [`ARCHITECTURE.md`](ARCHITECTURE.md) for
 the detailed system design, and [`test-plan-epic-2.md`](test-plan-epic-2.md)
