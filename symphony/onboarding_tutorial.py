@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+import json
+import os
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Callable, Mapping, TextIO
+
+
+INIT_TUTORIAL_ID = "init-orientation"
+INIT_TUTORIAL_VERSION = "1"
+SYMPHONY_OPENAI_BLOG_URL = "https://openai.com/index/open-source-codex-orchestration-symphony/"
+DEFAULT_CONFIG_DIR = ".config/symphony"
+DEFAULT_TUTORIAL_HISTORY_FILE = "tutorials.json"
+
+InputFunc = Callable[[str], str]
+OutputFunc = Callable[[str], None]
+
+
+def default_tutorial_history_path(environ: Mapping[str, str] | None = None) -> Path:
+    env = environ if environ is not None else os.environ
+    configured_home = _non_empty(env.get("XDG_CONFIG_HOME"))
+    if configured_home is not None:
+        return Path(configured_home).expanduser() / "symphony" / DEFAULT_TUTORIAL_HISTORY_FILE
+    return Path.home() / DEFAULT_CONFIG_DIR / DEFAULT_TUTORIAL_HISTORY_FILE
+
+
+def run_init_tutorial_once(
+    *,
+    history_path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    input_func: InputFunc | None = None,
+    output_func: OutputFunc | None = None,
+    input_stream: TextIO | None = None,
+) -> bool:
+    if input_func is None:
+        stream = input_stream if input_stream is not None else sys.stdin
+        if not stream.isatty():
+            return False
+
+    if not should_show_tutorial(INIT_TUTORIAL_ID, INIT_TUTORIAL_VERSION, path=history_path, environ=environ):
+        return False
+
+    language = prompt_tutorial_language(
+        version=INIT_TUTORIAL_VERSION,
+        input_func=input_func,
+        output_func=output_func,
+    )
+    print_init_tutorial(language, output_func=output_func)
+    record_tutorial_seen(
+        INIT_TUTORIAL_ID,
+        INIT_TUTORIAL_VERSION,
+        language=language,
+        path=history_path,
+        environ=environ,
+    )
+    return True
+
+
+def should_show_tutorial(
+    tutorial_id: str,
+    version: str,
+    *,
+    path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    record = _load_tutorial_record(tutorial_id, path=path, environ=environ)
+    return record.get("version") != version
+
+
+def record_tutorial_seen(
+    tutorial_id: str,
+    version: str,
+    *,
+    language: str,
+    path: str | Path | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
+    history_path = _resolve_history_path(path, environ)
+    payload = _load_history(history_path)
+    tutorials = payload.setdefault("tutorials", {})
+    if not isinstance(tutorials, dict):
+        tutorials = {}
+        payload["tutorials"] = tutorials
+
+    tutorials[tutorial_id] = {
+        "version": version,
+        "language": language,
+        "seen_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    _write_history(history_path, payload)
+    return history_path
+
+
+def prompt_tutorial_language(
+    *,
+    version: str,
+    input_func: InputFunc | None = None,
+    output_func: OutputFunc | None = None,
+) -> str:
+    read = input_func if input_func is not None else input
+    write = output_func if output_func is not None else print
+
+    write(f"Choose orientation language / 请选择教程语言 (tutorial v{version}):")
+    write("  1. English")
+    write("  2. 简体中文")
+    choice = read("Language [1]: ").strip()
+    if choice in {"2", "zh", "zh-cn", "zh_CN", "chinese", "中文", "简体中文"}:
+        return "zh-cn"
+    if choice not in {"", "1", "en", "english"}:
+        write("Unrecognized input — defaulting to English.")
+    return "en"
+
+
+def print_init_tutorial(language: str = "en", *, output_func: OutputFunc | None = None) -> None:
+    write = output_func if output_func is not None else print
+    lines = _simplified_chinese_lines() if language == "zh-cn" else _english_lines()
+    for line in lines:
+        write(line)
+
+
+def _english_lines() -> list[str]:
+    return [
+        "Welcome to Symphony.",
+        "Quick orientation before we wire things up:",
+        "",
+        "  What it is",
+        "    Symphony turns Linear into the control plane for coding agents.",
+        "    Instead of babysitting a handful of agent sessions, you write a clear",
+        "    ticket, move it into an active state, and let Symphony dispatch the work.",
+        "",
+        "  What you are setting up",
+        "    This init flow will create a repo-owned WORKFLOW.md, connect the tracker,",
+        "    point agents at the GitHub repo, and prepare the local workspace/log paths.",
+        "",
+        "  Why this matters",
+        "    OpenAI described the old ceiling as engineers comfortably managing about",
+        "    3-5 Codex sessions before context switching got painful. With Symphony,",
+        "    some teams saw landed PRs increase by 500% in the first three weeks.",
+        f"    Source: {SYMPHONY_OPENAI_BLOG_URL}",
+        "",
+        "  What to expect next",
+        "    I will ask for the Linear project, workflow states, workspace location,",
+        "    GitHub repo, and local auth. After init, run `symphony doctor WORKFLOW.md`",
+        "    to verify the setup, then try one disposable Linear ticket with",
+        "    `symphony run WORKFLOW.md --once`.",
+        "",
+    ]
+
+
+def _simplified_chinese_lines() -> list[str]:
+    return [
+        "欢迎使用 Symphony。",
+        "正式配置前，先快速对齐一下背景:",
+        "",
+        "  它是什么",
+        "    Symphony 把 Linear 变成编码代理的控制台。你不需要同时盯着一堆",
+        "    agent session，只要写清楚 ticket，把它移动到活跃状态，Symphony",
+        "    就会为这项工作启动 agent。",
+        "",
+        "  这次会交付什么",
+        "    init 会创建一个跟随仓库版本管理的 WORKFLOW.md，连接任务系统，",
+        "    指向 GitHub 仓库，并准备本地 workspace 和日志路径。",
+        "",
+        "  为什么值得做",
+        "    OpenAI 在 Symphony 文章里提到，以前工程师通常能舒服管理大约",
+        "    3-5 个 Codex session，再多就会被上下文切换拖慢。使用 Symphony",
+        "    后，一些团队在前三周落地的 PR 数量提升了 500%。",
+        f"    来源: {SYMPHONY_OPENAI_BLOG_URL}",
+        "",
+        "  接下来会发生什么",
+        "    我会依次询问 Linear project、工作流状态、workspace 位置、GitHub",
+        "    仓库和本地认证。完成 init 后，先运行 `symphony doctor WORKFLOW.md`",
+        "    检查配置，再用一个临时 Linear ticket 跑一次:",
+        "    `symphony run WORKFLOW.md --once`。",
+        "",
+    ]
+
+
+def _load_tutorial_record(
+    tutorial_id: str,
+    *,
+    path: str | Path | None,
+    environ: Mapping[str, str] | None,
+) -> dict[str, object]:
+    payload = _load_history(_resolve_history_path(path, environ))
+    tutorials = payload.get("tutorials")
+    if not isinstance(tutorials, dict):
+        return {}
+    record = tutorials.get(tutorial_id)
+    return record if isinstance(record, dict) else {}
+
+
+def _load_history(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_history(path: Path, payload: dict[str, object]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            path.parent.chmod(0o700)
+        except OSError:
+            pass
+
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    except OSError:
+        pass
+
+
+def _resolve_history_path(path: str | Path | None, environ: Mapping[str, str] | None) -> Path:
+    return Path(path).expanduser() if path is not None else default_tutorial_history_path(environ)
+
+
+def _non_empty(value: str | None) -> str | None:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None

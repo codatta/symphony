@@ -638,6 +638,14 @@ inside repository files.
   `symphony init`, `symphony doctor`, and `symphony run`.
 - `symphony init` generates a repository-owned `WORKFLOW.md` from presets. The
   initial presets are `codex-safe`, `codex-autonomous`, and `review-only`.
+- Interactive `symphony init` starts with a language picker for English or
+  Simplified Chinese, then shows a brief versioned terminal orientation that
+  explains what Symphony is, what setup will deliver, why issue-driven
+  orchestration matters, the OpenAI-reported before/after productivity shift,
+  and what the user should expect during the remaining init steps. Tutorial
+  read history is stored in the local Symphony config directory so the same
+  tutorial version is shown only once per installation; bumping the tutorial
+  version shows it again.
 - `symphony init` should guide all required auth before writing the final
   workflow: Linear, GitHub, Codex, and Claude Code. It should prefer existing
   authenticated CLIs or MCP sessions when available, validate them immediately,
@@ -700,6 +708,11 @@ inside repository files.
 **Scope:**
 
 - CLI subcommands and backwards-compatible legacy invocation.
+- Friendly bilingual terminal orientation for interactive init that lets users
+  choose English or Simplified Chinese before asking for project, repository,
+  and auth details. The tutorial is owned by a self-contained module with a
+  version and persisted read history so future onboarding entrypoints can
+  trigger it without depending on CLI internals.
 - Guided auth preflight inside `symphony init` for Linear CLI/MCP, GitHub via
   `gh`, Codex CLI, and Claude Code CLI.
 - Local credentials-file fallback for Linear API keys and GitHub tokens with
@@ -933,6 +946,10 @@ be the first Phase 2 gate before desktop or productionization work expands.
   `gh`, Codex CLI auth, and Claude Code CLI auth before writing the final
   workflow. Fall back to stored tokens only when the preferred tool auth path is
   unavailable.
+- [ ] **[CLI: Init orientation] (Linear: IN-257)** — add a short interactive
+  terminal tutorial with an English / Simplified Chinese picker, versioned read
+  history, reusable tutorial module, expected setup deliverables, productivity
+  context, and the next steps in the init flow.
 - [ ] **[Auth: Guided OAuth setup] (Linear: IN-205)** — add a CLI OAuth / PKCE
   flow with status and revoke commands after the API-key onboarding path is
   proven.
