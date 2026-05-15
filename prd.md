@@ -639,13 +639,18 @@ inside repository files.
 - `symphony init` generates a repository-owned `WORKFLOW.md` from presets. The
   initial presets are `codex-safe`, `codex-autonomous`, and `review-only`.
 - Interactive `symphony init` starts with a language picker for English or
-  Simplified Chinese, then shows a brief versioned terminal orientation that
-  explains what Symphony is, what setup will deliver, why issue-driven
-  orchestration matters, the OpenAI-reported before/after productivity shift,
-  and what the user should expect during the remaining init steps. Tutorial
-  read history is stored in the local Symphony config directory so the same
-  tutorial version is shown only once per installation; bumping the tutorial
-  version shows it again.
+  Simplified Chinese, then shows a brief versioned terminal orientation as
+  paginated Q&A cards instead of one long text block. Each page should answer
+  one setup question: what Symphony is, what init will deliver, why the
+  issue-driven workflow matters, what productivity shift OpenAI reported, and
+  what the user should expect next. Tutorial read history is stored in the local
+  Symphony config directory so the same tutorial version is shown only once per
+  installation; bumping the tutorial version shows it again.
+- Setup supports two execution modes. Interactive mode guides the user through
+  missing auth, project/repo selection, and workflow generation. Automated mode
+  validates existing CLI/env/MCP auth and explicit config inputs without
+  prompting, returning deterministic pass/fail output with exact remediation
+  commands for headless or scripted installs.
 - `symphony init` should guide all required auth before writing the final
   workflow: Linear, GitHub, Codex, and Claude Code. It should prefer existing
   authenticated CLIs or MCP sessions when available, validate them immediately,
@@ -685,6 +690,12 @@ inside repository files.
   browser-login and scope-discovery problem for many operators; Symphony should
   validate and reuse those sessions instead of making users paste credentials
   into another tool.
+- Crosscheck provides a useful setup pattern to adapt: environment checks happen
+  before configuration, guided onboarding owns interactive choices, tool-native
+  GitHub auth is derived from `gh`, status output summarizes auth/config/CLI
+  state, and failures include exact fix commands. Symphony should use the same
+  product pattern while keeping repository-owned `WORKFLOW.md` and
+  `symphony doctor` as first-class contracts.
 - Personal API key onboarding remains necessary as a fallback for Linear
   environments without CLI/MCP auth, headless CI, and early bootstrapping.
 - Presets are intentionally conservative. They encode safe concurrency,
@@ -701,6 +712,8 @@ inside repository files.
 - Require raw token entry for every integration. This is simple to implement,
   but creates unnecessary friction and hides whether the user's existing Linear,
   GitHub, Codex, or Claude local auth is already valid.
+- Make every setup run interactive. This is friendlier for first-time users, but
+  blocks scripted installs, CI validation, and repeatable team bootstrap flows.
 - Hide `WORKFLOW.md` entirely behind CLI preferences. This reduces visible
   configuration, but conflicts with Symphony's repository-owned workflow
   contract and makes review harder.
@@ -711,15 +724,20 @@ inside repository files.
 - Friendly bilingual terminal orientation for interactive init that lets users
   choose English or Simplified Chinese before asking for project, repository,
   and auth details. The tutorial is owned by a self-contained module with a
-  version and persisted read history so future onboarding entrypoints can
-  trigger it without depending on CLI internals.
+  version, persisted read history, and paginated Q&A renderer so future
+  onboarding entrypoints can trigger it without depending on CLI internals.
+- Explicit setup mode contract for `interactive` and `automated` runs, including
+  non-TTY behavior, skip/continue controls for tutorial pages, and stable exit
+  codes for missing auth or invalid configuration.
 - Guided auth preflight inside `symphony init` for Linear CLI/MCP, GitHub via
   `gh`, Codex CLI, and Claude Code CLI.
 - Local credentials-file fallback for Linear API keys and GitHub tokens with
   private file mode when the preferred CLI/MCP auth path is unavailable.
 - Workflow generation from smart presets and explicit project/state/workspace
   inputs.
-- Doctor/preflight checks that produce actionable pass/fail output.
+- Doctor/preflight checks that produce actionable pass/fail output, including
+  the active identity, token source, repository access, CLI versions, and exact
+  next command to run when a dependency is missing.
 - README and PR documentation for install and first-run usage.
 - Packaging metadata sufficient for `uv tool install` / `pipx` style installs.
 
@@ -729,13 +747,23 @@ inside repository files.
   Linear auth without editing secrets into `WORKFLOW.md`, validate GitHub repo
   access through `gh`, confirm Codex or Claude Code runner auth, run
   `symphony doctor`, and then run one poll tick with `symphony run --once`.
+- A first-time interactive user reads the orientation one page at a time, can
+  continue or skip without losing setup progress, and does not see the same
+  tutorial version again after completion.
+- Automated setup never blocks on prompts, uses existing CLI/env/MCP auth only,
+  and exits with stable failure reasons plus exact fix commands such as
+  `gh auth login`, `codex login --device-auth`, Claude Code login, or Linear
+  auth setup.
 - Generated workflows parse through the same production loader as hand-written
   workflows.
 - Credential lookup works from env vars, explicit WORKFLOW references, and the
   local credentials file, with Linear CLI/MCP and `gh` auth used when available.
 - Tests cover workflow generation, credential storage, CLI/MCP auth detection,
   `gh` access checks, runner auth checks, doctor checks, and backwards-compatible
-  CLI startup.
+  CLI startup. New onboarding tests cover tutorial pagination, language
+  selection, versioned read history, non-TTY behavior, interactive setup,
+  automated setup, and mocked auth adapters for Linear, GitHub, Codex, and
+  Claude Code.
 
 **Packaging closeout — 2026-05-14:** Python packaging is complete for the
 stabilized CLI surface. The README now documents `uv tool install`, `pipx`,
@@ -941,15 +969,22 @@ be the first Phase 2 gate before desktop or productionization work expands.
   installation instructions and release artifact workflow for `uv tool install`,
   `pipx`, wheel, and sdist packaging. Native binary builds and Homebrew remain
   follow-on distribution channels once the command surface stabilizes.
-- [ ] **[Auth: Guided tool authentication] (Linear: IN-257)** — make
-  `symphony init` detect and validate Linear CLI/MCP auth, GitHub access through
-  `gh`, Codex CLI auth, and Claude Code CLI auth before writing the final
-  workflow. Fall back to stored tokens only when the preferred tool auth path is
-  unavailable.
-- [ ] **[CLI: Init orientation] (Linear: IN-257)** — add a short interactive
+- [x] **[CLI: Init orientation] (Linear: IN-257)** — add a short interactive
   terminal tutorial with an English / Simplified Chinese picker, versioned read
   history, reusable tutorial module, expected setup deliverables, productivity
   context, and the next steps in the init flow.
+- [ ] **[CLI: Paginated init Q&A] (Linear: IN-268)** — break the orientation
+  into versioned, bilingual Q&A pages with continue/skip controls and persisted
+  completion only after the tutorial is actually shown.
+- [ ] **[Auth: Interactive/automated setup modes] (Linear: IN-268)** — make
+  `symphony init` support guided interactive setup and non-prompting automated
+  setup while detecting and validating Linear CLI/MCP auth, GitHub access
+  through `gh`, Codex CLI auth, and Claude Code CLI auth before writing the
+  final workflow.
+- [ ] **[CLI: Setup status preflight] (Linear: IN-268)** — expand
+  `symphony doctor` or add a status-style view that reports auth source,
+  account identity, repo access, CLI versions, config paths, and exact fix
+  commands for each missing dependency.
 - [ ] **[Auth: Guided OAuth setup] (Linear: IN-205)** — add a CLI OAuth / PKCE
   flow with status and revoke commands after the API-key onboarding path is
   proven.
