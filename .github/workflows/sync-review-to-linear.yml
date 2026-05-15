@@ -1,0 +1,83 @@
+name: Sync PR review to Linear
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  sync:
+    if: github.event.review.state == 'changes_requested'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract Linear issue identifier from PR body
+        id: extract
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Match Linear issue URL: linear.app/<team>/issue/<ID>/...
+          ISSUE_ID=$(echo "$PR_BODY" | grep -oP 'linear\.app/[^/]+/issue/\K[A-Z]+-\d+' | head -1)
+          if [ -z "$ISSUE_ID" ]; then
+            echo "No Linear issue identifier found in PR body, skipping."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Found Linear issue: $ISSUE_ID"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "issue_id=$ISSUE_ID" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post review comments to Linear issue
+        if: steps.extract.outputs.found == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          ISSUE_ID: ${{ steps.extract.outputs.issue_id }}
+          REVIEWER: ${{ github.event.review.user.login }}
+          REVIEW_BODY: ${{ github.event.review.body }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          COMMENT="PR review from **@${REVIEWER}** requested changes on ${PR_URL}:"$'\n\n'"${REVIEW_BODY}"
+          jq -n \
+            --arg issueId "$ISSUE_ID" \
+            --arg body "$COMMENT" \
+            '{"query": "mutation CreateComment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }", "variables": {"issueId": $issueId, "body": $body}}' \
+          | curl -s -X POST https://api.linear.app/graphql \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d @-
+
+      - name: Move Linear issue back to In Progress
+        if: steps.extract.outputs.found == 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          ISSUE_ID: ${{ steps.extract.outputs.issue_id }}
+        run: |
+          RESPONSE=$(jq -n \
+            --arg issueId "$ISSUE_ID" \
+            '{"query": "query GetStates($issueId: String!) { issue(id: $issueId) { team { states { nodes { id name } } } } }", "variables": {"issueId": $issueId}}' \
+          | curl -s -X POST https://api.linear.app/graphql \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d @-)
+
+          IN_PROGRESS_ID=$(echo "$RESPONSE" \
+            | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          states = data['data']['issue']['team']['states']['nodes']
+          match = next((s for s in states if s['name'].lower() == 'in progress'), None)
+          print(match['id'] if match else '')
+          ")
+
+          if [ -z "$IN_PROGRESS_ID" ]; then
+            echo "Could not find In Progress state, skipping state update."
+            exit 0
+          fi
+
+          jq -n \
+            --arg issueId "$ISSUE_ID" \
+            --arg stateId "$IN_PROGRESS_ID" \
+            '{"query": "mutation UpdateState($issueId: String!, $stateId: String!) { issueUpdate(id: $issueId, input: { stateId: $stateId }) { success } }", "variables": {"issueId": $issueId, "stateId": $stateId}}' \
+          | curl -s -X POST https://api.linear.app/graphql \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d @-
+          echo "Moved $ISSUE_ID back to In Progress."

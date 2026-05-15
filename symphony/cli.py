@@ -7,6 +7,7 @@ import logging
 import logging.handlers
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -331,9 +332,17 @@ async def run_once(runtime: SymphonyRuntime) -> RuntimeTickResult:
     return await runtime.run_tick()
 
 
-async def run_poll_loop(runtime: SymphonyRuntime, *, before_tick: TickHook | None = None) -> None:
+async def run_poll_loop(
+    runtime: SymphonyRuntime,
+    *,
+    before_tick: TickHook | None = None,
+    shutdown_event: asyncio.Event | None = None,
+) -> None:
     await runtime.record_startup_issues()
     while True:
+        if shutdown_event is not None and shutdown_event.is_set():
+            LOGGER.info("Shutdown requested, exiting poll loop.")
+            return
         try:
             if before_tick is not None:
                 result = before_tick()
@@ -424,23 +433,36 @@ async def run_daemon(
     workflow_reloader: "RuntimeWorkflowReloader | None" = None,
     status_server: StatusServer = serve_status_api,
 ) -> None:
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _on_signal() -> None:
+        LOGGER.info("Shutdown signal received, stopping after current tick completes.")
+        shutdown_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _on_signal)
+
     status_api = create_status_api(runtime)
     status_task = asyncio.create_task(status_server(status_api, context.port))
     poll_task = asyncio.create_task(
         run_poll_loop(
             runtime,
             before_tick=workflow_reloader.reload_if_changed if workflow_reloader is not None else None,
+            shutdown_event=shutdown_event,
         )
     )
     tasks = {status_task, poll_task}
 
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
         for task in pending:
             task.cancel()
     finally:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.remove_signal_handler(sig)
         for task in tasks:
             if not task.done():
                 task.cancel()
