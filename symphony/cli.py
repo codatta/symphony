@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import getpass
 import logging
+import logging.handlers
 import shlex
 import shutil
 import subprocess
@@ -40,7 +41,7 @@ from symphony.onboarding import (
     write_workflow,
 )
 from symphony.runtime import RuntimeTickResult, SymphonyRuntime
-from symphony.tracker.linear import LinearClient
+from symphony.tracker.linear import LinearClient, LinearClientError
 from symphony.workflow import WorkflowError, load_workflow
 from symphony.workflow import EffectiveWorkflow, WorkflowReloader
 from symphony.workspace import WorkspaceManager
@@ -255,11 +256,26 @@ def validate_dispatch_config(config: WorkflowConfig, *, environ: Mapping[str, st
             raise ConfigError("codex_command_required")
 
 
-def configure_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+def configure_logging(level: str, logs_root: Path | None = None) -> None:
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, level))
+
+    if not root.handlers:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(fmt)
+        root.addHandler(stream_handler)
+
+    if logs_root is not None:
+        logs_root.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.handlers.RotatingFileHandler(
+            logs_root / "symphony.log",
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(fmt)
+        root.addHandler(file_handler)
 
 
 def create_runtime(context: StartupContext) -> SymphonyRuntime:
@@ -321,7 +337,16 @@ async def run_poll_loop(runtime: SymphonyRuntime, *, before_tick: TickHook | Non
             result = before_tick()
             if asyncio.iscoroutine(result) or isinstance(result, asyncio.Future):
                 await result
-        result = await runtime.run_tick()
+        try:
+            result = await runtime.run_tick()
+        except LinearClientError as exc:
+            LOGGER.warning("Linear API error during poll tick, will retry next interval: %s", exc)
+            await asyncio.sleep(runtime.state.poll_interval_ms / 1000)
+            continue
+        except Exception as exc:
+            LOGGER.error("Unexpected error during poll tick, will retry next interval: %s", exc, exc_info=True)
+            await asyncio.sleep(runtime.state.poll_interval_ms / 1000)
+            continue
         LOGGER.info(
             "Tick completed: fetched=%s dispatched=%s completed=%s failed=%s released=%s",
             result.fetched,
@@ -512,8 +537,6 @@ def run_main(argv: Sequence[str] | None = None) -> int:
 
 
 def run_with_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    configure_logging(args.log_level)
-
     try:
         context = load_startup_context(
             args.workflow_path,
@@ -522,6 +545,8 @@ def run_with_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         )
     except StartupError as exc:
         parser.exit(2, f"symphony: {exc}\n")
+
+    configure_logging(args.log_level, logs_root=context.logs_root)
 
     if args.check:
         print(f"Workflow OK: {context.workflow_path}")
