@@ -76,7 +76,7 @@ defmodule Mix.Tasks.PrBody.Check do
 
   defp extract_template_headings(template, template_path) do
     headings =
-      Regex.scan(~r/^\#{4,6}\s+.+$/m, template)
+      Regex.scan(~r/^\#{1,6}\s+.+$/m, template)
       |> Enum.map(&hd/1)
 
     if headings == [] do
