@@ -34,11 +34,15 @@ jobs:
           REVIEW_BODY: ${{ github.event.review.body }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          COMMENT="PR review from **@${REVIEWER}** requested changes on ${PR_URL}:\n\n${REVIEW_BODY}"
-          curl -s -X POST https://api.linear.app/graphql \
+          COMMENT="PR review from **@${REVIEWER}** requested changes on ${PR_URL}:"$'\n\n'"${REVIEW_BODY}"
+          jq -n \
+            --arg issueId "$ISSUE_ID" \
+            --arg body "$COMMENT" \
+            '{"query": "mutation CreateComment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }", "variables": {"issueId": $issueId, "body": $body}}' \
+          | curl -s -X POST https://api.linear.app/graphql \
             -H "Authorization: $LINEAR_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"query\": \"mutation { commentCreate(input: { issueId: \\\"$ISSUE_ID\\\", body: \\\"$(echo "$COMMENT" | sed 's/\"/\\\"/g')\\\" }) { success } }\"}"
+            -d @-
 
       - name: Move Linear issue back to In Progress
         if: steps.extract.outputs.found == 'true'
@@ -46,13 +50,14 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           ISSUE_ID: ${{ steps.extract.outputs.issue_id }}
         run: |
-          # Fetch the In Progress state ID for the issue's team
-          RESPONSE=$(curl -s -X POST https://api.linear.app/graphql \
+          RESPONSE=$(jq -n \
+            --arg issueId "$ISSUE_ID" \
+            '{"query": "query GetStates($issueId: String!) { issue(id: $issueId) { team { states { nodes { id name } } } } }", "variables": {"issueId": $issueId}}' \
+          | curl -s -X POST https://api.linear.app/graphql \
             -H "Authorization: $LINEAR_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"query\": \"{ issue(id: \\\"$ISSUE_ID\\\") { team { states { nodes { id name } } } } }\"}")
+            -d @-)
 
-          STATE_ID=$(echo "$RESPONSE" | grep -oP '"id":"\K[^"]+' | head -1)
           IN_PROGRESS_ID=$(echo "$RESPONSE" \
             | python3 -c "
           import sys, json
@@ -67,8 +72,12 @@ jobs:
             exit 0
           fi
 
-          curl -s -X POST https://api.linear.app/graphql \
+          jq -n \
+            --arg issueId "$ISSUE_ID" \
+            --arg stateId "$IN_PROGRESS_ID" \
+            '{"query": "mutation UpdateState($issueId: String!, $stateId: String!) { issueUpdate(id: $issueId, input: { stateId: $stateId }) { success } }", "variables": {"issueId": $issueId, "stateId": $stateId}}' \
+          | curl -s -X POST https://api.linear.app/graphql \
             -H "Authorization: $LINEAR_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"query\": \"mutation { issueUpdate(id: \\\"$ISSUE_ID\\\", input: { stateId: \\\"$IN_PROGRESS_ID\\\" }) { success } }\"}"
+            -d @-
           echo "Moved $ISSUE_ID back to In Progress."

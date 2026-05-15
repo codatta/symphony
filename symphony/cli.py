@@ -455,7 +455,7 @@ async def run_daemon(
     tasks = {status_task, poll_task}
 
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
         for task in pending:
