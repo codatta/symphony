@@ -638,13 +638,29 @@ inside repository files.
   `symphony init`, `symphony doctor`, and `symphony run`.
 - `symphony init` generates a repository-owned `WORKFLOW.md` from presets. The
   initial presets are `codex-safe`, `codex-autonomous`, and `review-only`.
-- CLI Linear auth starts with personal API keys stored outside the repo in a
-  local credentials file. Resolution order remains env var → WORKFLOW.md
-  indirection/literal → local credentials file. OAuth / PKCE remains the secure
-  production path for the desktop app and later CLI auth.
+- `symphony init` should guide all required auth before writing the final
+  workflow: Linear, GitHub, Codex, and Claude Code. It should prefer existing
+  authenticated CLIs or MCP sessions when available, validate them immediately,
+  and only ask for raw tokens when no usable local auth is present.
+- CLI Linear auth starts by detecting a usable Linear CLI / MCP authentication
+  context. If available, init should use it to validate identity, list accessible
+  teams/projects/states, and select the target project without asking the user to
+  paste a token. Personal API keys stored outside the repo remain the fallback.
+  Resolution order remains env var → WORKFLOW.md indirection/literal → Linear
+  CLI/MCP auth context → local credentials file.
+- GitHub auth should be delegated to `gh`. `symphony init` should run or guide
+  `gh auth login`, validate `gh auth status`, and check the authenticated
+  account can access the configured owner/repository with enough scope for
+  branch push and pull-request creation. Manual GitHub token entry remains a
+  fallback for environments where `gh` is unavailable.
+- Agent auth should be checked during onboarding. For Codex, init/doctor should
+  verify the `codex` command is installed and can start the configured app-server
+  mode or report the exact login/setup command needed. For Claude Code,
+  init/doctor should verify the `claude` command is installed and authenticated
+  before generating a Claude-default workflow.
 - `symphony doctor` validates the generated workflow, resolved Linear auth,
-  Codex command availability, workspace writability, logs root, and status API
-  address before users run a live poll.
+  GitHub repository access, Codex or Claude Code runner auth, workspace
+  writability, logs root, and status API address before users run a live poll.
 - `symphony run` is the clear long-term command for the daemon while the legacy
   `symphony WORKFLOW.md --once/--check` invocation remains compatible.
 - Package first through normal Python CLI channels (`uv tool install`, `pipx`,
@@ -656,8 +672,13 @@ inside repository files.
 - A desktop app remains valuable, but it is too large for the immediate usability
   problem. A packaged CLI with guided onboarding removes most setup friction
   while keeping the delivery slice small and testable.
-- Linear OAuth is still the preferred end-state, but personal API key onboarding
-  is enough to make the current Linear + Codex loop usable out of the box.
+- Linear OAuth is still the preferred end-state, but the CLI should first reuse
+  existing developer auth surfaces. Linear CLI/MCP and `gh` already solve the
+  browser-login and scope-discovery problem for many operators; Symphony should
+  validate and reuse those sessions instead of making users paste credentials
+  into another tool.
+- Personal API key onboarding remains necessary as a fallback for Linear
+  environments without CLI/MCP auth, headless CI, and early bootstrapping.
 - Presets are intentionally conservative. They encode safe concurrency,
   sandbox, and polling defaults without hiding the generated `WORKFLOW.md` from
   teams that want to review or version runtime policy.
@@ -669,6 +690,9 @@ inside repository files.
 - Require OAuth before improving the CLI. This is more secure, but adds Linear
   app registration, redirect handling, token refresh, and revocation before the
   basic command surface is proven.
+- Require raw token entry for every integration. This is simple to implement,
+  but creates unnecessary friction and hides whether the user's existing Linear,
+  GitHub, Codex, or Claude local auth is already valid.
 - Hide `WORKFLOW.md` entirely behind CLI preferences. This reduces visible
   configuration, but conflicts with Symphony's repository-owned workflow
   contract and makes review harder.
@@ -676,7 +700,10 @@ inside repository files.
 **Scope:**
 
 - CLI subcommands and backwards-compatible legacy invocation.
-- Local credentials-file fallback for Linear API keys with private file mode.
+- Guided auth preflight inside `symphony init` for Linear CLI/MCP, GitHub via
+  `gh`, Codex CLI, and Claude Code CLI.
+- Local credentials-file fallback for Linear API keys and GitHub tokens with
+  private file mode when the preferred CLI/MCP auth path is unavailable.
 - Workflow generation from smart presets and explicit project/state/workspace
   inputs.
 - Doctor/preflight checks that produce actionable pass/fail output.
@@ -686,14 +713,16 @@ inside repository files.
 **Exit criteria:**
 
 - A new user can install Symphony as a CLI, run `symphony init`, store or provide
-  Linear auth without editing secrets into `WORKFLOW.md`, run `symphony doctor`,
-  and then run one poll tick with `symphony run --once`.
+  Linear auth without editing secrets into `WORKFLOW.md`, validate GitHub repo
+  access through `gh`, confirm Codex or Claude Code runner auth, run
+  `symphony doctor`, and then run one poll tick with `symphony run --once`.
 - Generated workflows parse through the same production loader as hand-written
   workflows.
 - Credential lookup works from env vars, explicit WORKFLOW references, and the
-  local credentials file.
-- Tests cover workflow generation, credential storage, doctor checks, and
-  backwards-compatible CLI startup.
+  local credentials file, with Linear CLI/MCP and `gh` auth used when available.
+- Tests cover workflow generation, credential storage, CLI/MCP auth detection,
+  `gh` access checks, runner auth checks, doctor checks, and backwards-compatible
+  CLI startup.
 
 **Packaging closeout — 2026-05-14:** Python packaging is complete for the
 stabilized CLI surface. The README now documents `uv tool install`, `pipx`,
@@ -899,6 +928,11 @@ be the first Phase 2 gate before desktop or productionization work expands.
   installation instructions and release artifact workflow for `uv tool install`,
   `pipx`, wheel, and sdist packaging. Native binary builds and Homebrew remain
   follow-on distribution channels once the command surface stabilizes.
+- [ ] **[Auth: Guided tool authentication] (Linear: IN-257)** — make
+  `symphony init` detect and validate Linear CLI/MCP auth, GitHub access through
+  `gh`, Codex CLI auth, and Claude Code CLI auth before writing the final
+  workflow. Fall back to stored tokens only when the preferred tool auth path is
+  unavailable.
 - [ ] **[Auth: Guided OAuth setup] (Linear: IN-205)** — add a CLI OAuth / PKCE
   flow with status and revoke commands after the API-key onboarding path is
   proven.
