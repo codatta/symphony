@@ -3,19 +3,26 @@ from __future__ import annotations
 import json
 import os
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Mapping, TextIO
 
 
 INIT_TUTORIAL_ID = "init-orientation"
-INIT_TUTORIAL_VERSION = "1"
+INIT_TUTORIAL_VERSION = "2"
 SYMPHONY_OPENAI_BLOG_URL = "https://openai.com/index/open-source-codex-orchestration-symphony/"
 DEFAULT_CONFIG_DIR = ".config/symphony"
 DEFAULT_TUTORIAL_HISTORY_FILE = "tutorials.json"
 
 InputFunc = Callable[[str], str]
 OutputFunc = Callable[[str], None]
+
+
+@dataclass(frozen=True)
+class TutorialPage:
+    question: str
+    answer: tuple[str, ...]
 
 
 def default_tutorial_history_path(environ: Mapping[str, str] | None = None) -> Path:
@@ -47,14 +54,15 @@ def run_init_tutorial_once(
         input_func=input_func,
         output_func=output_func,
     )
-    print_init_tutorial(language, output_func=output_func)
-    record_tutorial_seen(
-        INIT_TUTORIAL_ID,
-        INIT_TUTORIAL_VERSION,
-        language=language,
-        path=history_path,
-        environ=environ,
-    )
+    completed = print_init_tutorial(language, input_func=input_func, output_func=output_func)
+    if completed:
+        record_tutorial_seen(
+            INIT_TUTORIAL_ID,
+            INIT_TUTORIAL_VERSION,
+            language=language,
+            path=history_path,
+            environ=environ,
+        )
     return True
 
 
@@ -113,69 +121,142 @@ def prompt_tutorial_language(
     return "en"
 
 
-def print_init_tutorial(language: str = "en", *, output_func: OutputFunc | None = None) -> None:
+def print_init_tutorial(
+    language: str = "en",
+    *,
+    input_func: InputFunc | None = None,
+    output_func: OutputFunc | None = None,
+) -> bool:
     write = output_func if output_func is not None else print
-    lines = _simplified_chinese_lines() if language == "zh-cn" else _english_lines()
-    for line in lines:
-        write(line)
+    read = input_func if input_func is not None else input
+    pages = tutorial_pages(language)
+    write(_welcome_line(language))
+    for index, page in enumerate(pages, start=1):
+        write("")
+        write(f"[{index}/{len(pages)}] {page.question}")
+        for line in page.answer:
+            write(f"    {line}" if line else "")
+        if index == len(pages):
+            write("")
+            continue
+
+        choice = read(_continue_prompt(language)).strip().lower()
+        if choice in {"s", "skip", "q", "quit", "跳过"}:
+            write(_skipped_line(language))
+            return False
+    return True
 
 
-def _english_lines() -> list[str]:
-    return [
-        "Welcome to Symphony.",
-        "Quick orientation before we wire things up:",
-        "",
-        "  What it is",
-        "    Symphony turns Linear into the control plane for coding agents.",
-        "    Instead of babysitting a handful of agent sessions, you write a clear",
-        "    ticket, move it into an active state, and let Symphony dispatch the work.",
-        "",
-        "  What you are setting up",
-        "    This init flow will create a repo-owned WORKFLOW.md, connect the tracker,",
-        "    point agents at the GitHub repo, and prepare the local workspace/log paths.",
-        "",
-        "  Why this matters",
-        "    OpenAI described the old ceiling as engineers comfortably managing about",
-        "    3-5 Codex sessions before context switching got painful. With Symphony,",
-        "    some teams saw landed PRs increase by 500% in the first three weeks.",
-        f"    Source: {SYMPHONY_OPENAI_BLOG_URL}",
-        "",
-        "  What to expect next",
-        "    I will ask for the Linear project, workflow states, workspace location,",
-        "    GitHub repo, and local auth. After init, run `symphony doctor WORKFLOW.md`",
-        "    to verify the setup, then try one disposable Linear ticket with",
-        "    `symphony run WORKFLOW.md --once`.",
-        "",
-    ]
+def tutorial_pages(language: str = "en") -> tuple[TutorialPage, ...]:
+    return _simplified_chinese_pages() if language == "zh-cn" else _english_pages()
 
 
-def _simplified_chinese_lines() -> list[str]:
-    return [
-        "欢迎使用 Symphony。",
-        "正式配置前，先快速对齐一下背景:",
-        "",
-        "  它是什么",
-        "    Symphony 把 Linear 变成编码代理的控制台。你不需要同时盯着一堆",
-        "    agent session，只要写清楚 ticket，把它移动到活跃状态，Symphony",
-        "    就会为这项工作启动 agent。",
-        "",
-        "  这次会交付什么",
-        "    init 会创建一个跟随仓库版本管理的 WORKFLOW.md，连接任务系统，",
-        "    指向 GitHub 仓库，并准备本地 workspace 和日志路径。",
-        "",
-        "  为什么值得做",
-        "    OpenAI 在 Symphony 文章里提到，以前工程师通常能舒服管理大约",
-        "    3-5 个 Codex session，再多就会被上下文切换拖慢。使用 Symphony",
-        "    后，一些团队在前三周落地的 PR 数量提升了 500%。",
-        f"    来源: {SYMPHONY_OPENAI_BLOG_URL}",
-        "",
-        "  接下来会发生什么",
-        "    我会依次询问 Linear project、工作流状态、workspace 位置、GitHub",
-        "    仓库和本地认证。完成 init 后，先运行 `symphony doctor WORKFLOW.md`",
-        "    检查配置，再用一个临时 Linear ticket 跑一次:",
-        "    `symphony run WORKFLOW.md --once`。",
-        "",
-    ]
+def _welcome_line(language: str) -> str:
+    if language == "zh-cn":
+        return "欢迎使用 Symphony。"
+    return "Welcome to Symphony."
+
+
+def _continue_prompt(language: str) -> str:
+    if language == "zh-cn":
+        return "按 Enter 继续，或输入 s 跳过教程: "
+    return "Press Enter for next, or type s to skip: "
+
+
+def _skipped_line(language: str) -> str:
+    if language == "zh-cn":
+        return "已跳过教程。你可以继续完成 setup。"
+    return "Orientation skipped. Setup will continue."
+
+
+def _english_pages() -> tuple[TutorialPage, ...]:
+    return (
+        TutorialPage(
+            "What is Symphony?",
+            (
+                "Symphony turns Linear into the control plane for coding agents.",
+                "Instead of babysitting a handful of agent sessions, you write a clear",
+                "ticket, move it into an active state, and let Symphony dispatch the work.",
+            ),
+        ),
+        TutorialPage(
+            "What will init create?",
+            (
+                "This init flow creates a repo-owned WORKFLOW.md, connects the tracker,",
+                "points agents at the GitHub repo, and prepares local workspace/log paths.",
+            ),
+        ),
+        TutorialPage(
+            "Why does issue-driven orchestration matter?",
+            (
+                "Issues become the shared contract for scope, status, review feedback,",
+                "and handoff. That makes agent work easier to inspect, retry, and review.",
+            ),
+        ),
+        TutorialPage(
+            "What productivity shift did OpenAI report?",
+            (
+                "OpenAI described the old ceiling as engineers comfortably managing about",
+                "3-5 Codex sessions before context switching got painful. With Symphony,",
+                "some teams saw landed PRs increase by 500% in the first three weeks.",
+                f"Source: {SYMPHONY_OPENAI_BLOG_URL}",
+            ),
+        ),
+        TutorialPage(
+            "What should I expect next?",
+            (
+                "I will ask for the Linear project, workflow states, workspace location,",
+                "GitHub repo, and local auth. After init, run `symphony doctor WORKFLOW.md`",
+                "to verify the setup, then try one disposable Linear ticket with",
+                "`symphony run WORKFLOW.md --once`.",
+            ),
+        ),
+    )
+
+
+def _simplified_chinese_pages() -> tuple[TutorialPage, ...]:
+    return (
+        TutorialPage(
+            "Symphony 是什么?",
+            (
+                "Symphony 把 Linear 变成编码代理的控制台。你不需要同时盯着一堆",
+                "agent session，只要写清楚 ticket，把它移动到活跃状态，Symphony",
+                "就会为这项工作启动 agent。",
+            ),
+        ),
+        TutorialPage(
+            "init 会创建什么?",
+            (
+                "init 会创建一个跟随仓库版本管理的 WORKFLOW.md，连接任务系统，",
+                "指向 GitHub 仓库，并准备本地 workspace 和日志路径。",
+            ),
+        ),
+        TutorialPage(
+            "为什么要用 issue 驱动编排?",
+            (
+                "Issue 会成为 scope、状态、review feedback 和 handoff 的共同契约。",
+                "这样 agent 工作更容易检查、重试和 review。",
+            ),
+        ),
+        TutorialPage(
+            "OpenAI 报告了什么生产力变化?",
+            (
+                "OpenAI 在 Symphony 文章里提到，以前工程师通常能舒服管理大约",
+                "3-5 个 Codex session，再多就会被上下文切换拖慢。使用 Symphony",
+                "后，一些团队在前三周落地的 PR 数量提升了 500%。",
+                f"来源: {SYMPHONY_OPENAI_BLOG_URL}",
+            ),
+        ),
+        TutorialPage(
+            "接下来会发生什么?",
+            (
+                "我会依次询问 Linear project、工作流状态、workspace 位置、GitHub",
+                "仓库和本地认证。完成 init 后，先运行 `symphony doctor WORKFLOW.md`",
+                "检查配置，再用一个临时 Linear ticket 跑一次:",
+                "`symphony run WORKFLOW.md --once`。",
+            ),
+        ),
+    )
 
 
 def _load_tutorial_record(

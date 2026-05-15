@@ -24,10 +24,12 @@ class OnboardingTutorialTests(unittest.TestCase):
 
     def test_print_init_tutorial_explains_purpose_and_next_steps(self):
         lines: list[str] = []
-        print_init_tutorial(output_func=lines.append)
+        completed = print_init_tutorial(input_func=lambda _prompt: "", output_func=lines.append)
         text = "\n".join(lines)
 
-        self.assertIn("What it is", text)
+        self.assertTrue(completed)
+        self.assertIn("[1/5] What is Symphony?", text)
+        self.assertIn("[5/5] What should I expect next?", text)
         self.assertIn("WORKFLOW.md", text)
         self.assertIn("3-5 Codex sessions", text)
         self.assertIn("500% in the first three weeks", text)
@@ -37,16 +39,31 @@ class OnboardingTutorialTests(unittest.TestCase):
 
     def test_print_init_tutorial_supports_simplified_chinese(self):
         lines: list[str] = []
-        print_init_tutorial("zh-cn", output_func=lines.append)
+        completed = print_init_tutorial("zh-cn", input_func=lambda _prompt: "", output_func=lines.append)
         text = "\n".join(lines)
 
+        self.assertTrue(completed)
         self.assertIn("欢迎使用 Symphony", text)
+        self.assertIn("[1/5] Symphony 是什么?", text)
         self.assertIn("WORKFLOW.md", text)
         self.assertIn("3-5 个 Codex session", text)
         self.assertIn("提升了 500%", text)
         self.assertIn("https://openai.com/index/open-source-codex-orchestration-symphony/", text)
         self.assertIn("symphony doctor WORKFLOW.md", text)
         self.assertIn("symphony run WORKFLOW.md --once", text)
+
+    def test_print_init_tutorial_skip_does_not_complete(self):
+        lines: list[str] = []
+        prompts: list[str] = []
+
+        completed = print_init_tutorial(
+            input_func=lambda prompt: prompts.append(prompt) or "s",
+            output_func=lines.append,
+        )
+
+        self.assertFalse(completed)
+        self.assertIn("Orientation skipped", "\n".join(lines))
+        self.assertEqual(["Press Enter for next, or type s to skip: "], prompts)
 
     def test_language_picker_displays_version_and_defaults_to_english(self):
         lines: list[str] = []
@@ -145,6 +162,19 @@ class OnboardingTutorialTests(unittest.TestCase):
             self.assertFalse(second)
             self.assertIn("Welcome to Symphony", "\n".join(first_lines))
             self.assertEqual([], second_lines)
+
+    def test_run_init_tutorial_once_does_not_record_skipped_tutorial(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "tutorials.json"
+
+            shown = run_init_tutorial_once(
+                history_path=history_path,
+                input_func=lambda prompt: "" if prompt == "Language [1]: " else "s",
+                output_func=lambda _line: None,
+            )
+
+            self.assertTrue(shown)
+            self.assertTrue(should_show_tutorial(INIT_TUTORIAL_ID, INIT_TUTORIAL_VERSION, path=history_path))
 
     def test_run_init_tutorial_once_skips_when_stdin_is_not_tty(self):
         class NonTTY:

@@ -141,6 +141,10 @@ Body
                         str(credentials_path),
                         "--linear-api-key",
                         "lin_secret",
+                        "--runner",
+                        "codex",
+                        "--codex-command",
+                        "python --version",
                     ]
                 )
 
@@ -154,6 +158,22 @@ Body
                 main(["init", "--yes"])
 
         self.assertEqual(2, raised.exception.code)
+
+    def test_init_automated_reports_all_missing_inputs_without_prompting(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow_path = Path(temp_dir) / "WORKFLOW.md"
+            stderr = StringIO()
+
+            with redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as raised:
+                    main(["init", "--mode", "automated", "--workflow-path", str(workflow_path)])
+
+            self.assertEqual(2, raised.exception.code)
+            message = stderr.getvalue()
+            self.assertIn("automated setup failed", message)
+            self.assertIn("--project-slug", message)
+            self.assertIn("linear auth", message)
+            self.assertFalse(workflow_path.exists())
 
     def test_doctor_checks_validate_command_and_workspace(self):
         with tempfile.TemporaryDirectory() as temp_dir:

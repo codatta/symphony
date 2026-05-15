@@ -152,7 +152,8 @@ Run onboarding from the repository where you want to keep the generated
 symphony init --project-slug your-linear-project-slug
 ```
 
-The wizard will guide you through:
+In an interactive terminal, the wizard starts with a short paginated orientation
+and then guides you through:
 
 1. **Linear project slug** — the short identifier for your project (e.g. `my-project`).
    Find it at: Linear → your project → Settings, or in the project URL
@@ -170,17 +171,22 @@ The wizard will guide you through:
    **Pull requests** read/write permissions.
    Create one at: github.com/settings/tokens → Fine-grained tokens.
 
-This writes `WORKFLOW.md` and stores credentials locally. For non-interactive setup:
+This writes `WORKFLOW.md` and stores credentials locally. For non-interactive
+setup, use automated mode with all required inputs supplied up front:
 
 ```bash
 symphony init \
-  --yes \
+  --mode automated \
   --project-slug your-linear-project-slug \
   --linear-api-key lin_api_... \
   --github-token ghp_... \
   --github-org your-org \
   --github-repo your-repo
 ```
+
+`--yes` remains available as an alias for `--mode automated`. Automated setup
+never prompts; if required input or local auth is missing, it exits with
+remediation commands before writing `WORKFLOW.md`.
 
 Available presets are `codex-safe`, `codex-autonomous`, and `review-only`.
 
