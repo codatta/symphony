@@ -39,6 +39,7 @@ from symphony.onboarding import (
     parse_state_list,
     write_workflow,
 )
+from symphony.onboarding_tutorial import run_init_tutorial_once
 from symphony.runtime import RuntimeTickResult, SymphonyRuntime
 from symphony.tracker.linear import LinearClient
 from symphony.workflow import WorkflowError, load_workflow
@@ -554,6 +555,9 @@ def init_main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.yes and not args.project_slug:
             raise OnboardingError("missing_project_slug")
+
+        if not args.yes:
+            run_init_tutorial_once()
 
         # --- Step 1: Linear project slug ---
         if not args.project_slug and not args.yes:
